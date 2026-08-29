@@ -2,8 +2,10 @@
 const { FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting } = require("obsidian");
 /** 用于执行现有 JoySpace 上传脚本的子进程能力 */
 const { execFile } = require("node:child_process");
+const crypto = require("node:crypto");
 /** 用于验证运行环境路径是否存在的文件系统能力 */
-const { access } = require("node:fs/promises");
+const { access, mkdtemp, rm, writeFile } = require("node:fs/promises");
+const os = require("node:os");
 /** 用于拼接插件内置上传脚本路径的能力 */
 const path = require("node:path");
 /** 用于将子进程执行函数转换为 Promise 的工具 */
@@ -19,6 +21,7 @@ const DEFAULT_SETTINGS = {
   tenantCode: "CN.JD.GROUP",
   promoteSectionHeadings: false,
   openAfterUpload: true,
+  webcliExecutable: "",
 };
 
 /** 将回调形式的子进程执行函数转换为 Promise */
@@ -31,22 +34,35 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     await this.loadSettings();
     await this.ensureRuntimeReady();
 
-    this.addRibbonIcon("upload-cloud", "上传当前文档到 JoySpace", async () => {
-      await this.publishActiveMarkdown();
+    this.addRibbonIcon("upload-cloud", "发布/更新当前文档到 JoySpace", async () => {
+      await this.publishOrUpdateActiveMarkdown();
     });
 
     this.addCommand({
       id: "publish-active-markdown-to-joyspace",
-      name: "上传当前文档到 JoySpace",
+      name: "发布/更新当前文档到 JoySpace",
       checkCallback: (checking) => {
         /** 当前编辑器中打开的文件 */
         const activeFile = this.app.workspace.getActiveFile();
         /** 当前文件是否为可上传的 Markdown 文档 */
         const canPublish = activeFile?.extension === "md";
         if (canPublish && !checking) {
-          void this.publishActiveMarkdown();
+          void this.publishOrUpdateActiveMarkdown();
         }
         return canPublish;
+      },
+    });
+
+    this.addCommand({
+      id: "update-active-markdown-to-joyspace",
+      name: "更新当前文档到已绑定 JoySpace 页面",
+      checkCallback: (checking) => {
+        const activeFile = this.app.workspace.getActiveFile();
+        const canUpdate = activeFile?.extension === "md";
+        if (canUpdate && !checking) {
+          void this.updateActiveMarkdown();
+        }
+        return canUpdate;
       },
     });
 
@@ -94,13 +110,21 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
       const nodeExecutable = await this.detectExecutable("node");
       /** 登录 Shell 中检测到的 Python 安装位置 */
       const pythonExecutable = await this.detectExecutable("python3");
+      /** 登录 Shell 中检测到的 WebCLI 安装位置 */
+      let webcliExecutable = this.settings.webcliExecutable;
+      try {
+        webcliExecutable = await this.detectExecutable("webcli");
+      } catch {
+        webcliExecutable = this.settings.webcliExecutable;
+      }
 
       this.settings.nodeExecutable = nodeExecutable;
       this.settings.pythonExecutable = pythonExecutable;
+      this.settings.webcliExecutable = webcliExecutable;
       await this.saveSettings();
 
       if (showNotice) {
-        new Notice(`已自动检测 Node 和 Python：\n${nodeExecutable}\n${pythonExecutable}`, 8000);
+        new Notice(`已自动检测 Node、Python 和 WebCLI：\n${nodeExecutable}\n${pythonExecutable}\n${webcliExecutable || "未检测到 webcli"}`, 8000);
       }
       return true;
     } catch (error) {
@@ -200,6 +224,72 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     return path.join(pluginDir, "import_markdown_doc.mjs");
   }
 
+  stripYamlFrontmatter(markdown) {
+    return String(markdown || "").replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "");
+  }
+
+  promoteSectionHeadingsForJoySpace(markdown) {
+    const lines = String(markdown || "").split("\n");
+    let inFence = false;
+    return lines
+      .map((line) => {
+        if (/^\s*```/.test(line)) {
+          inFence = !inFence;
+          return line;
+        }
+        if (inFence) {
+          return line;
+        }
+        return line.replace(/^(#{2,6})(\s+)/, (match, hashes, space) => `${hashes.slice(1)}${space}`);
+      })
+      .join("\n");
+  }
+
+  extractTitleFromMarkdown(markdown, file) {
+    const heading = String(markdown || "").match(/^\s*#\s+(.+?)\s*$/m)?.[1]?.trim();
+    return heading || file.basename || "untitled";
+  }
+
+  removeFirstH1(markdown) {
+    return String(markdown || "").replace(/^\s*#\s+.+?\s*\r?\n+/, "");
+  }
+
+  prepareJoySpaceMarkdown(rawMarkdown, file) {
+    const markdownWithoutFrontmatter = this.stripYamlFrontmatter(rawMarkdown);
+    const title = this.extractTitleFromMarkdown(markdownWithoutFrontmatter, file);
+    const bodyWithoutTitle = this.removeFirstH1(markdownWithoutFrontmatter);
+    const markdown = this.settings.promoteSectionHeadings
+      ? this.promoteSectionHeadingsForJoySpace(bodyWithoutTitle)
+      : bodyWithoutTitle;
+    const normalizedMarkdown = markdown.replace(/\r\n/g, "\n").trimEnd() + "\n";
+    const hash = crypto.createHash("sha256").update(normalizedMarkdown, "utf8").digest("hex");
+    return { title, markdown: normalizedMarkdown, hash };
+  }
+
+  getFrontmatterValue(cache, key) {
+    const value = cache?.frontmatter?.[key];
+    return typeof value === "string" ? value.trim() : value ? String(value).trim() : "";
+  }
+
+  async saveJoySpaceFrontmatter(file, values) {
+    await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+      for (const [key, value] of Object.entries(values)) {
+        frontmatter[key] = value;
+      }
+    });
+  }
+
+  async publishOrUpdateActiveMarkdown() {
+    const activeFile = this.app.workspace.getActiveFile();
+    const cache = activeFile ? this.app.metadataCache.getFileCache(activeFile) : null;
+    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
+    if (pageId) {
+      await this.updateActiveMarkdown();
+      return;
+    }
+    await this.publishActiveMarkdown();
+  }
+
   /** 上传当前打开的 Markdown 文件并反馈执行结果 */
   async publishActiveMarkdown() {
     /** 当前编辑器中打开的文件 */
@@ -254,6 +344,9 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
       }
     }
 
+    const originalMarkdown = await this.app.vault.read(activeFile);
+    const prepared = this.prepareJoySpaceMarkdown(originalMarkdown, activeFile);
+
     /** 本次上传传递给导入脚本的命令参数 */
     const args = [importScriptPath, "--file", markdownPath, "--tenant-code", this.settings.tenantCode];
     if (this.settings.targetPageUrl.trim()) {
@@ -285,6 +378,13 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
         throw new Error("上传脚本未返回有效的 JoySpace 文档地址");
       }
 
+      await this.saveJoySpaceFrontmatter(activeFile, {
+        "joyspace-page-id": result.pageId,
+        "joyspace-url": result.link,
+        "joyspace-sync-hash": prepared.hash,
+        "joyspace-synced-at": new Date().toISOString(),
+      });
+
       new Notice(`已上传到 JoySpace：${result.title || activeFile.basename}`, 6000);
       console.info("[JoySpace Publisher] 上传成功：", result);
 
@@ -296,6 +396,136 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
       const message = error?.stderr?.trim() || error?.message || String(error);
       console.error("[JoySpace Publisher] 上传失败：", error);
       new Notice(`JoySpace 上传失败：${message}`, 10000);
+    }
+  }
+
+  async execWebcli(args, cwd) {
+    const webcliExecutable = this.settings.webcliExecutable.trim() || "webcli";
+    const { stdout, stderr } = await execFileAsync(webcliExecutable, args, {
+      cwd,
+      timeout: 120_000,
+      maxBuffer: 10 * 1024 * 1024,
+      env: {
+        ...process.env,
+        PATH: [this.settings.nodeExecutable.trim() ? path.dirname(this.settings.nodeExecutable.trim()) : "", process.env.PATH]
+          .filter(Boolean)
+          .join(path.delimiter),
+      },
+    });
+    if (stderr.trim()) {
+      console.warn("[JoySpace Publisher] WebCLI 警告：", stderr.trim());
+    }
+    return stdout;
+  }
+
+  parseWebcliJson(stdout) {
+    const normalizedStdout = String(stdout || "").trim();
+    if (!normalizedStdout) {
+      return null;
+    }
+    try {
+      return JSON.parse(normalizedStdout);
+    } catch {
+      throw new Error(`WebCLI 返回了无效 JSON：${normalizedStdout.slice(0, 300)}`);
+    }
+  }
+
+  resolveJoySpaceUrl(cache) {
+    const url = this.getFrontmatterValue(cache, "joyspace-url");
+    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
+    if (url) {
+      return url;
+    }
+    if (pageId) {
+      return `https://joyspace.jd.com/pages/${pageId}`;
+    }
+    return "";
+  }
+
+  extractLastBodyBlockIndex(inspectOutput) {
+    const text = typeof inspectOutput === "string" ? inspectOutput : JSON.stringify(inspectOutput || "");
+    const indexes = [...text.matchAll(/\[(\d+)]/g)].map((match) => Number(match[1])).filter((index) => index > 0);
+    return indexes.length ? Math.max(...indexes) : 0;
+  }
+
+  async updateActiveMarkdown() {
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!activeFile || activeFile.extension !== "md") {
+      new Notice("请先打开一个 Markdown 文档");
+      return;
+    }
+
+    const adapter = this.app.vault.adapter;
+    if (!(adapter instanceof FileSystemAdapter)) {
+      new Notice("JoySpace 更新仅支持 Obsidian 桌面端本地仓库");
+      return;
+    }
+
+    const cache = this.app.metadataCache.getFileCache(activeFile);
+    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
+    const joyspaceUrl = this.resolveJoySpaceUrl(cache);
+    if (!pageId || !joyspaceUrl) {
+      new Notice("当前文档未绑定 JoySpace 页面，请先发布一次", 8000);
+      return;
+    }
+
+    const originalMarkdown = await this.app.vault.read(activeFile);
+    const prepared = this.prepareJoySpaceMarkdown(originalMarkdown, activeFile);
+    const lastHash = this.getFrontmatterValue(cache, "joyspace-sync-hash");
+    if (lastHash && lastHash === prepared.hash) {
+      new Notice("内容无变化，无需更新 JoySpace", 5000);
+      return;
+    }
+
+    const markdownPath = adapter.getFullPath(activeFile.path);
+    const markdownDir = path.dirname(markdownPath);
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "joyspace-publisher-"));
+    const tempMarkdownPath = path.join(tempDir, `${activeFile.basename}.md`);
+
+    new Notice(`正在更新 JoySpace：《${activeFile.basename}》...`);
+
+    try {
+      await writeFile(tempMarkdownPath, prepared.markdown, "utf8");
+      const inspectStdout = await this.execWebcli(["joyspace", "edit", joyspaceUrl, "--mode", "inspect", "-f", "json"], markdownDir);
+      const inspectOutput = this.parseWebcliJson(inspectStdout) || inspectStdout;
+      const lastBodyBlockIndex = this.extractLastBodyBlockIndex(inspectOutput);
+
+      await this.execWebcli(
+        ["joyspace", "edit", joyspaceUrl, "--mode", "write", "--content-file", tempMarkdownPath, "--position", "end", "-f", "json"],
+        markdownDir,
+      );
+
+      if (lastBodyBlockIndex > 0) {
+        await this.execWebcli(
+          ["joyspace", "edit", joyspaceUrl, "--mode", "delete", "--at", `1-${lastBodyBlockIndex}`, "-f", "json"],
+          markdownDir,
+        );
+      }
+
+      await this.execWebcli(["joyspace", "rename", joyspaceUrl, "--name", prepared.title, "-f", "json"], markdownDir);
+      const viewStdout = await this.execWebcli(["joyspace", "view", joyspaceUrl, "-f", "json"], markdownDir);
+      const viewText = JSON.stringify(this.parseWebcliJson(viewStdout) || viewStdout);
+      if (!viewText.includes(pageId) || !viewText.includes(prepared.title)) {
+        throw new Error("更新后回读验证失败，未确认页面 ID 和标题一致");
+      }
+
+      await this.saveJoySpaceFrontmatter(activeFile, {
+        "joyspace-page-id": pageId,
+        "joyspace-url": joyspaceUrl,
+        "joyspace-sync-hash": prepared.hash,
+        "joyspace-synced-at": new Date().toISOString(),
+      });
+
+      new Notice(`已更新 JoySpace：${prepared.title}`, 6000);
+      if (this.settings.openAfterUpload) {
+        await shell.openExternal(joyspaceUrl);
+      }
+    } catch (error) {
+      const message = error?.stderr?.trim() || error?.message || String(error);
+      console.error("[JoySpace Publisher] 更新失败：", error);
+      new Notice(`JoySpace 更新失败：${message}`, 12000);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -372,6 +602,19 @@ class JoySpacePublisherSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("WebCLI 可执行文件")
+      .setDesc("用于更新已绑定的 JoySpace 页面。插件启用时通过 which webcli 自动填写，也可以手动修改。")
+      .addText((text) =>
+        text
+          .setPlaceholder("webcli")
+          .setValue(this.plugin.settings.webcliExecutable)
+          .onChange(async (value) => {
+            this.plugin.settings.webcliExecutable = value.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("目标 JoySpace 页面")
       .setDesc("可选。上传文档会创建在该页面所在目录；留空则创建在私人空间根目录。")
       .addText((text) =>
@@ -411,8 +654,8 @@ class JoySpacePublisherSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("上传后打开 JoySpace")
-      .setDesc("上传成功后使用系统浏览器打开创建的 JoySpace 文档。")
+      .setName("发布或更新后打开 JoySpace")
+      .setDesc("发布或更新成功后使用系统浏览器打开 JoySpace 文档。")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.openAfterUpload).onChange(async (value) => {
           this.plugin.settings.openAfterUpload = value;

@@ -183,6 +183,10 @@ export function stripYamlFrontmatter(markdown) {
   return text.replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "");
 }
 
+export function removeFirstH1(markdown) {
+  return String(markdown || "").replace(/^\s*#\s+.+?\s*\r?\n+/, "");
+}
+
 export function promoteSectionHeadingsForJoySpace(markdown) {
   const lines = String(markdown || "").split("\n");
   let inFence = false;
@@ -394,9 +398,10 @@ async function main() {
   /** 去除文档属性后的待上传正文，避免 Obsidian 元数据出现在 JoySpace 页面中 */
   const markdownWithoutFrontmatter = stripYamlFrontmatter(originalMarkdown);
   const title = options.title || extractTitleFromMarkdown(markdownWithoutFrontmatter, options.filePath);
+  const bodyWithoutTitle = removeFirstH1(markdownWithoutFrontmatter);
   const markdown = options.promoteSectionHeadings
-    ? promoteSectionHeadingsForJoySpace(markdownWithoutFrontmatter)
-    : markdownWithoutFrontmatter;
+    ? promoteSectionHeadingsForJoySpace(bodyWithoutTitle)
+    : bodyWithoutTitle;
   const auth = await resolveAuth(options);
   const { teamHeaderId } = requireTenantConfig(options.tenantCode);
   const cookieHeader = buildCookieHeader(auth);

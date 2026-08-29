@@ -1,15 +1,17 @@
 # JoySpace Publisher
 
-Obsidian 桌面端插件：一键将当前 Markdown 文档上传为新的 JoySpace 文档。
+Obsidian 桌面端插件：一键将当前 Markdown 文档发布或更新到 JoySpace。
 
 ## 功能
 
-- 左侧工具栏点击上传当前 Markdown。
-- 命令面板执行“上传当前文档到 JoySpace”。
-- 默认上传到 JoySpace 私人空间根目录。
+- 左侧工具栏点击发布/更新当前 Markdown。
+- 命令面板执行“发布/更新当前文档到 JoySpace”。
+- 默认首次发布到 JoySpace 私人空间根目录。
 - 可指定一个 JoySpace 页面，将新文档创建到该页面所在目录。
+- 首次发布成功后写入 `joyspace-page-id`、`joyspace-url`、`joyspace-sync-hash`。
+- 后续更新会复用原 JoySpace 页面链接，并在内容无变化时跳过。
 - 可在上传时提升章节标题层级。
-- 上传成功后可自动打开 JoySpace 文档。
+- 发布或更新成功后可自动打开 JoySpace 文档。
 
 ## 分发文件
 
@@ -39,7 +41,7 @@ ln -s \
 ## 运行要求
 
 - Obsidian 桌面端。
-- 本机可执行 `node` 和 `python3`。
+- 本机可执行 `node`、`python3` 和 `webcli`。
 - Chrome 已登录 `joyspace.jd.com` / `jd.com`。
 - 插件目录中存在内置的 `import_markdown_doc.mjs`。
 
@@ -50,6 +52,7 @@ ln -s \
 ```bash
 which node
 which python3
+which webcli
 ```
 
 检测结果会自动写入插件设置，并会检查当前 Python 是否已安装 `browser_cookie3`。如果缺少该依赖，插件会自动执行：
@@ -65,5 +68,7 @@ python3 -m pip install --user browser_cookie3
 打开一个 Markdown 文档，然后点击左侧上传图标，或在命令面板执行：
 
 ```text
-JoySpace Publisher: 上传当前文档到 JoySpace
+JoySpace Publisher: 发布/更新当前文档到 JoySpace
 ```
+
+首次发布会创建新的 JoySpace 页面，并把绑定信息写入当前 Markdown 的 YAML frontmatter。之后再次执行同一命令，会使用 WebCLI 将本地 Markdown 单向覆盖更新到原 JoySpace 页面。
