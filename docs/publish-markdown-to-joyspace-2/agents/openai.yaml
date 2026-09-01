@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish Markdown To Joyspace"
+  short_description: "Create JoySpace docs from Markdown."
+  default_prompt: "Use $publish-markdown-to-joyspace to create a JoySpace document from this local Markdown file."

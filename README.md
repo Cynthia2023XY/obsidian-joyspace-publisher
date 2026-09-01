@@ -12,6 +12,7 @@ Obsidian 桌面端插件：一键将当前 Markdown 文档发布或更新到 Joy
 - 后续更新会复用原 JoySpace 页面链接，并在内容无变化时跳过。
 - 可在上传时提升章节标题层级。
 - 发布或更新成功后可自动打开 JoySpace 文档。
+- 可输入 JoySpace 链接，将普通文档通过接口拉取为 Markdown 到当前目录。
 
 ## 分发文件
 
@@ -21,6 +22,7 @@ Obsidian 桌面端插件：一键将当前 Markdown 文档发布或更新到 Joy
 main.js
 manifest.json
 import_markdown_doc.mjs
+pull_joyspace_doc.mjs
 README.md
 ```
 
@@ -72,3 +74,11 @@ JoySpace Publisher: 发布/更新当前文档到 JoySpace
 ```
 
 首次发布会创建新的 JoySpace 页面，并把绑定信息写入当前 Markdown 的 YAML frontmatter。之后再次执行同一命令，会使用 WebCLI 将本地 Markdown 单向覆盖更新到原 JoySpace 页面。
+
+也可以执行：
+
+```text
+JoySpace Publisher: 从 JoySpace 链接拉取文档到当前目录
+```
+
+输入 JoySpace 普通文档链接后，插件会通过 `POST https://apijoyspace.jd.com/v1/pages/content` 拉取文档内容，转换为 Markdown 并保存到当前打开文件所在目录。

@@ -1,5 +1,5 @@
 /** Obsidian 插件运行时提供的界面和文件系统能力 */
-const { FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting } = require("obsidian");
+const { FileSystemAdapter, Modal, Notice, Plugin, PluginSettingTab, Setting } = require("obsidian");
 /** 用于执行现有 JoySpace 上传脚本的子进程能力 */
 const { execFile } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -63,6 +63,16 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
           void this.updateActiveMarkdown();
         }
         return canUpdate;
+      },
+    });
+
+    this.addCommand({
+      id: "pull-joyspace-document-to-current-folder",
+      name: "从 JoySpace 链接拉取文档到当前目录",
+      callback: () => {
+        new JoySpacePullModal(this.app, async (url) => {
+          await this.pullJoySpaceDocument(url);
+        }).open();
       },
     });
 
@@ -215,13 +225,19 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     }
   }
 
+  resolvePluginFilePath(adapter, fileName) {
+    const manifestDir = this.manifest.dir || `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    const pluginDir = path.isAbsolute(manifestDir) ? manifestDir : adapter.getFullPath(manifestDir);
+    return path.join(pluginDir, fileName);
+  }
+
   /** 获取插件内置上传脚本的绝对路径 */
   resolveImportScriptPath(adapter) {
-    /** 插件清单记录的目录路径 */
-    const manifestDir = this.manifest.dir || `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
-    /** 插件目录的绝对路径 */
-    const pluginDir = path.isAbsolute(manifestDir) ? manifestDir : adapter.getFullPath(manifestDir);
-    return path.join(pluginDir, "import_markdown_doc.mjs");
+    return this.resolvePluginFilePath(adapter, "import_markdown_doc.mjs");
+  }
+
+  resolvePullScriptPath(adapter) {
+    return this.resolvePluginFilePath(adapter, "pull_joyspace_doc.mjs");
   }
 
   stripYamlFrontmatter(markdown) {
@@ -399,6 +415,88 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     }
   }
 
+  getCurrentOutputDir(adapter) {
+    const activeFile = this.app.workspace.getActiveFile();
+    if (activeFile?.parent?.path) {
+      return adapter.getFullPath(activeFile.parent.path);
+    }
+    return adapter.getFullPath("/");
+  }
+
+  async pullJoySpaceDocument(url) {
+    const normalizedUrl = String(url || "").trim();
+    if (!normalizedUrl) {
+      new Notice("请输入 JoySpace 文档链接", 5000);
+      return;
+    }
+
+    const adapter = this.app.vault.adapter;
+    if (!(adapter instanceof FileSystemAdapter)) {
+      new Notice("JoySpace 拉取仅支持 Obsidian 桌面端本地仓库");
+      return;
+    }
+
+    const nodeExecutable = this.settings.nodeExecutable.trim();
+    const pythonExecutable = this.settings.pythonExecutable.trim();
+    let pullScriptPath = "";
+    try {
+      pullScriptPath = this.resolvePullScriptPath(adapter);
+      if (nodeExecutable.includes("/")) {
+        await access(nodeExecutable);
+      }
+      if (pythonExecutable.includes("/")) {
+        await access(pythonExecutable);
+      }
+      await access(pullScriptPath);
+    } catch {
+      new Notice("Node、Python 可执行文件或 JoySpace 拉取脚本不存在，请检查插件设置", 8000);
+      return;
+    }
+
+    const hasCookieDependency = await this.hasBrowserCookieDependency(pythonExecutable);
+    if (!hasCookieDependency) {
+      try {
+        new Notice("正在安装 JoySpace 拉取依赖 browser_cookie3，请稍候...", 8000);
+        await this.installBrowserCookieDependency(pythonExecutable);
+      } catch (error) {
+        const message = error?.stderr?.trim() || error?.message || String(error);
+        console.error("[JoySpace Publisher] 拉取前安装 browser_cookie3 失败：", error);
+        new Notice(`browser_cookie3 安装失败：${message}`, 12000);
+        return;
+      }
+    }
+
+    const outputDir = this.getCurrentOutputDir(adapter);
+    const args = [pullScriptPath, "--url", normalizedUrl, "--output-dir", outputDir, "--tenant-code", this.settings.tenantCode];
+
+    new Notice("正在从 JoySpace 拉取文档...");
+    try {
+      const { stdout, stderr } = await execFileAsync(nodeExecutable, args, {
+        timeout: 120_000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: {
+          ...process.env,
+          PYTHON: pythonExecutable,
+        },
+      });
+      if (stderr.trim()) {
+        console.warn("[JoySpace Publisher] 拉取脚本警告：", stderr.trim());
+      }
+      const result = this.parseUploadResult(stdout, stderr);
+      const vaultPath = adapter.getFullPath("/");
+      const relativePath = path.relative(vaultPath, result.outputPath).split(path.sep).join("/");
+      const createdFile = this.app.vault.getAbstractFileByPath(relativePath);
+      if (createdFile) {
+        await this.app.workspace.getLeaf(false).openFile(createdFile);
+      }
+      new Notice(`已拉取 JoySpace 文档：${result.title}`, 6000);
+    } catch (error) {
+      const message = error?.stderr?.trim() || error?.message || String(error);
+      console.error("[JoySpace Publisher] 拉取失败：", error);
+      new Notice(`JoySpace 拉取失败：${message}`, 12000);
+    }
+  }
+
   async execWebcli(args, cwd) {
     const webcliExecutable = this.settings.webcliExecutable.trim() || "webcli";
     const { stdout, stderr } = await execFileAsync(webcliExecutable, args, {
@@ -546,6 +644,65 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     }
   }
 };
+
+class JoySpacePullModal extends Modal {
+  constructor(app, onSubmit) {
+    super(app);
+    this.onSubmit = onSubmit;
+    this.url = "";
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "从 JoySpace 拉取文档" });
+
+    new Setting(contentEl)
+      .setName("JoySpace 文档链接")
+      .setDesc("请输入 https://joyspace.jd.com/pages/... 普通文档链接。")
+      .addText((text) => {
+        text.setPlaceholder("https://joyspace.jd.com/pages/...").onChange((value) => {
+          this.url = value.trim();
+        });
+        text.inputEl.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void this.submit();
+          }
+        });
+        window.setTimeout(() => text.inputEl.focus(), 50);
+      });
+
+    new Setting(contentEl)
+      .addButton((button) =>
+        button
+          .setButtonText("拉取到当前目录")
+          .setCta()
+          .onClick(async () => {
+            await this.submit();
+          }),
+      )
+      .addButton((button) =>
+        button.setButtonText("取消").onClick(() => {
+          this.close();
+        }),
+      );
+  }
+
+  async submit() {
+    const url = this.url.trim();
+    if (!url) {
+      new Notice("请输入 JoySpace 文档链接", 5000);
+      return;
+    }
+    this.close();
+    await this.onSubmit(url);
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
 
 /** 展示和维护 JoySpace 上传配置的设置页 */
 class JoySpacePublisherSettingTab extends PluginSettingTab {

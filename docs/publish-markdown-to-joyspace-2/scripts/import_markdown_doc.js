@@ -1,8 +1,6 @@
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const DEFAULT_JOYSPACE_API_BASE = "https://apijoyspace.jd.com";
@@ -91,6 +89,28 @@ function requireTenantConfig(tenantCode) {
   return config;
 }
 
+
+export function promoteSectionHeadingsForJoySpace(markdown) {
+  const lines = String(markdown || "").split("\n");
+  let inFence = false;
+
+  return lines
+    .map((line) => {
+      if (/^\s*```/.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence) {
+        return line;
+      }
+
+      return line.replace(/^(#{2,6})(\s+)/, (match, hashes, space) => {
+        return `${hashes.slice(1)}${space}`;
+      });
+    })
+    .join("\n");
+}
+
 export function normalizeCookieMap(cookies) {
   if (!cookies || typeof cookies !== "object") {
     return {};
@@ -143,13 +163,39 @@ export function normalizeBrowserCookiePayload(payload) {
 
 export async function loadJdCookiesFromBrowser({ pythonCommand = process.env.PYTHON || "python3" } = {}) {
   try {
+    const spawnOptions = {
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024,
+    };
+
+    let cmd = pythonCommand;
+    let args = ["-c", BROWSER_COOKIE3_SCRIPT];
+
+   // macOS Rosetta workaround: when Node runs under x64 (Rosetta) while the
+   // system Python binary supports arm64, native Python extensions compiled
+   // for arm64 (e.g. lz4 used by browser_cookie3) will fail to load under
+    // x86_64 Python.  Probe arm64 capability first, then force `arch -arm64`.
+    if (process.platform === "darwin" && process.arch === "x64") {
+      try {
+        const probe = await execFileAsync("arch", [
+          "-arm64",
+          pythonCommand,
+          "-c",
+          "import browser_cookie3; print(1)",
+        ]);
+        if (probe.stdout?.trim() === "1") {
+          cmd = "arch";
+          args = ["-arm64", pythonCommand, ...args];
+        }
+      } catch {
+        // detection failed; use defaults
+      }
+    }
+
     const { stdout, stderr } = await execFileAsync(
-      pythonCommand,
-      ["-c", BROWSER_COOKIE3_SCRIPT],
-      {
-        timeout: 15_000,
-        maxBuffer: 1024 * 1024,
-      },
+      cmd,
+      args,
+      spawnOptions,
     );
     const parsed = JSON.parse(stdout || "{}");
     const result = normalizeBrowserCookiePayload(parsed);
@@ -176,51 +222,10 @@ export function extractTitleFromMarkdown(markdown, filePath) {
   return stem || "untitled";
 }
 
-/** 移除文档开头的 Obsidian/YAML 属性块，避免内部属性被同步到 JoySpace 正文 */
-export function stripYamlFrontmatter(markdown) {
-  /** 当前待上传的 Markdown 原文 */
-  const text = String(markdown || "");
-  return text.replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "");
-}
-
-export function removeFirstH1(markdown) {
-  return String(markdown || "").replace(/^\s*#\s+.+?\s*\r?\n+/, "");
-}
-
-export function promoteSectionHeadingsForJoySpace(markdown) {
-  const lines = String(markdown || "").split("\n");
-  let inFence = false;
-
-  return lines
-    .map((line) => {
-      if (/^\s*```/.test(line)) {
-        inFence = !inFence;
-        return line;
-      }
-      if (inFence) {
-        return line;
-      }
-
-      return line.replace(/^(#{2,6})(\s+)/, (match, hashes, space) => {
-        return `${hashes.slice(1)}${space}`;
-      });
-    })
-    .join("\n");
-}
-
-/** 统一 JoySpace 页面基础信息中的团队和目录字段 */
-export function normalizeLocationFromBasicInfo({ team_id, folder_id, teamId, folderId }) {
-  /** 兼容 JoySpace 基础信息可能返回的驼峰团队字段 */
-  const sourceTeamId = team_id ?? teamId;
-  /** 兼容 JoySpace 基础信息可能返回的驼峰目录字段 */
-  const sourceFolderId = folder_id ?? folderId;
-  /** 用于创建文档的规范化团队 ID */
+export function normalizeLocationFromBasicInfo({ team_id, folder_id }) {
   const normalizedTeamId =
-    typeof sourceTeamId === "string" && sourceTeamId.trim().startsWith("$")
-      ? "root"
-      : sourceTeamId?.trim();
-  /** 用于创建文档的规范化目录 ID */
-  const normalizedFolderId = sourceFolderId?.trim() || undefined;
+    typeof team_id === "string" && team_id.trim().startsWith("$") ? "root" : team_id?.trim();
+  const normalizedFolderId = folder_id?.trim() || undefined;
 
   return {
     teamId: normalizedTeamId || "root",
@@ -276,43 +281,27 @@ async function requestJoySpaceJson({ method, url, cookieHeader, teamHeaderId, bo
   }
 
   const json = await response.json();
+  // Detect various JoySpace API error response formats
   if (
     json?.status === "failed" ||
     json?.errCode ||
     (json?.errorCode && json.errorCode !== "0") ||
     (json?.code != null && json.code !== 0 && json.code !== "0")
   ) {
-    /** JoySpace 业务失败时返回的错误码 */
-    const errorCode = json.errCode || json.errorCode || json.code || "unknown";
-    /** JoySpace 业务失败时返回的可读错误信息 */
-    const errorMessage =
+    const errCode = json.errCode || json.errorCode || json.code || "unknown";
+    const errMsg =
       json.errMsg ||
       json.errorMsg ||
       json.msg ||
       json.message ||
       json.error ||
       "Unknown API error";
-    throw new Error(`JoySpace API error ${errorCode}: ${errorMessage} (${url})`);
+    throw new Error(`JoySpace API error ${errCode}: ${errMsg} (${url})`);
   }
   if (json?.status === "success" || json?.status === "0" || json?.status === 0) {
     return json.data;
   }
   return json.data ?? json;
-}
-
-/** 从 JoySpace 团队或目录链接中提取新文档的直接存放位置 */
-export function extractTeamFolderFromUrl(pageUrl) {
-  /** 团队链接中的团队 ID 与可选目录 ID 匹配结果 */
-  const match = pageUrl.match(
-    /joyspace\.jd\.com\/teams\/([A-Za-z0-9_-]+)(?:\/([A-Za-z0-9_-]+))?/i,
-  );
-  if (!match?.[1]) {
-    return null;
-  }
-  return {
-    teamId: match[1],
-    folderId: match[2] || undefined,
-  };
 }
 
 function extractPageIdFromUrl(pageUrl) {
@@ -334,7 +323,7 @@ async function resolveTargetLocation({ pageUrl, cookieHeader, teamHeaderId }) {
     };
   }
 
-  /** 直接从团队或目录链接解析出的存放位置 */
+  // Check if it is a team/folder URL; if so, use the IDs directly.
   const teamFolder = extractTeamFolderFromUrl(pageUrl);
   if (teamFolder) {
     return {
@@ -385,25 +374,6 @@ async function verifyJoySpacePage({ pageId, cookieHeader, teamHeaderId }) {
   });
 }
 
-/** 统一 JoySpace 创建接口的多种返回字段，避免创建成功后丢失页面地址 */
-export function normalizeCreatedPageResponse(createResponse) {
-  /** JoySpace 创建接口返回的文档数据 */
-  const created = createResponse && typeof createResponse === "object" ? createResponse : {};
-  /** 同时兼容新旧接口的文档 ID 字段 */
-  const pageId = String(created.id || created.pageId || "").trim();
-  if (!pageId) {
-    /** 用于排查接口升级的创建响应字段列表 */
-    const responseKeys = Object.keys(created).join(", ") || "empty response";
-    throw new Error(`JoySpace 创建接口未返回 id/pageId，响应字段：${responseKeys}`);
-  }
-
-  return {
-    created,
-    pageId,
-    link: created.link || `https://joyspace.jd.com/pages/${pageId}`,
-  };
-}
-
 function parseArgs(argv) {
   const options = {
     filePath: "",
@@ -428,9 +398,6 @@ function parseArgs(argv) {
       );
     }
     switch (current) {
-      case "--promote-section-headings":
-        options.promoteSectionHeadings = true;
-        break;
       case "--file":
         options.filePath = next || "";
         index += 1;
@@ -442,6 +409,9 @@ function parseArgs(argv) {
       case "--page-url":
         options.pageUrl = next || "";
         index += 1;
+        break;
+      case "--promote-section-headings":
+        options.promoteSectionHeadings = true;
         break;
       case "--tenant-code":
         options.tenantCode = next || options.tenantCode;
@@ -462,13 +432,10 @@ async function main() {
   }
 
   const originalMarkdown = await fs.readFile(options.filePath, "utf8");
-  /** 去除文档属性后的待上传正文，避免 Obsidian 元数据出现在 JoySpace 页面中 */
-  const markdownWithoutFrontmatter = stripYamlFrontmatter(originalMarkdown);
-  const title = options.title || extractTitleFromMarkdown(markdownWithoutFrontmatter, options.filePath);
-  const bodyWithoutTitle = removeFirstH1(markdownWithoutFrontmatter);
+  const title = options.title || extractTitleFromMarkdown(originalMarkdown, options.filePath);
   const markdown = options.promoteSectionHeadings
-    ? promoteSectionHeadingsForJoySpace(bodyWithoutTitle)
-    : bodyWithoutTitle;
+    ? promoteSectionHeadingsForJoySpace(originalMarkdown)
+    : originalMarkdown;
   const auth = await resolveAuth(options);
   const { teamHeaderId } = requireTenantConfig(options.tenantCode);
   const cookieHeader = buildCookieHeader(auth);
@@ -478,7 +445,6 @@ async function main() {
     teamHeaderId,
   });
 
-  /** JoySpace 创建接口的原始文档数据 */
   const createResponse = await createJoySpacePage({
     markdown,
     title,
@@ -486,12 +452,10 @@ async function main() {
     cookieHeader,
     teamHeaderId,
   });
-  /** 兼容 id/pageId 后的新建 JoySpace 文档信息 */
-  const createdPage = normalizeCreatedPageResponse(createResponse);
-  /** JoySpace 创建接口返回的原始字段 */
-  const created = createdPage.created;
+  const created = createResponse || {};
+  const pageId = created.id || created.pageId;
   const verified = await verifyJoySpacePage({
-    pageId: createdPage.pageId,
+    pageId,
     cookieHeader,
     teamHeaderId,
   });
@@ -501,14 +465,14 @@ async function main() {
       {
         authMode: auth.mode,
         cookieSource: auth.cookieSource || undefined,
-        pageId: createdPage.pageId,
+        pageId,
         title: created.title || title,
-        link: createdPage.link,
-        teamId: created.team_id || created.teamId || location.teamId,
-        folderId: created.folder_id || created.folderId || location.folderId || "",
+        link: created.link || `https://joyspace.jd.com/pages/${pageId}`,
+        teamId: created.team_id || location.teamId,
+        folderId: created.folder_id || location.folderId || "",
         locationSource: location.source,
-        promotedSectionHeadings: options.promoteSectionHeadings,
-        verified: Array.isArray(verified?.content) && verified.content.length > 0,
+        promoteSectionHeadings: options.promoteSectionHeadings,
+        verified: !!verified && Array.isArray(verified?.content) && verified.content.length > 0,
       },
       null,
       2,
@@ -516,14 +480,7 @@ async function main() {
   );
 }
 
-/** 当前模块经过 Node 解析后的真实文件路径，用于兼容软链接插件目录 */
-const currentModuleRealPath = realpathSync(fileURLToPath(import.meta.url));
-/** 命令行入口脚本经过真实路径解析后的文件路径，用于判断当前模块是否为直接执行入口 */
-const invokedScriptRealPath = process.argv[1] ? realpathSync(path.resolve(process.argv[1])) : "";
-/** 当前脚本是否由命令行直接执行，用于避免被测试导入时触发上传流程 */
-const isDirectCliInvocation = invokedScriptRealPath === currentModuleRealPath;
-
-if (isDirectCliInvocation) {
+if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
@@ -531,3 +488,17 @@ if (isDirectCliInvocation) {
 }
 
 export { resolveAuth };
+export function extractTeamFolderFromUrl(pageUrl) {
+  // Team/folder URL: /teams/<teamId>/<folderId>
+  // Or /teams/<teamId> (without folder, publishes to team root)
+  const match = pageUrl.match(
+    /joyspace\.jd\.com\/teams\/([A-Za-z0-9_-]+)(?:\/([A-Za-z0-9_-]+))?/i,
+  );
+  if (match?.[1]) {
+    return {
+      teamId: match[1],
+      folderId: match[2] || undefined,
+    };
+  }
+  return null;
+}
