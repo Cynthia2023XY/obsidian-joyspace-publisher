@@ -83,4 +83,4 @@ The production build bundles project-owned runtime modules into a single CommonJ
 
 ## License
 
-A project license must be selected before submitting this plugin to the Obsidian Community Directory.
+Licensed under the [MIT License](LICENSE). Copyright © 2026 Cynthia Ding.

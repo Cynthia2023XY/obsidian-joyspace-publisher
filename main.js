@@ -34,6 +34,84 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+// src/infrastructure/joyspace-http.mjs
+function createJoySpaceRequestOptions({ method, cookieHeader, teamHeaderId, body }) {
+  const payload = body == null ? "" : JSON.stringify(body);
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Cookie: cookieHeader,
+    "x-team-id": teamHeaderId
+  };
+  if (payload) {
+    headers["Content-Length"] = Buffer.byteLength(payload);
+  }
+  return { method, headers, payload };
+}
+function parseJoySpaceResponse(json, url) {
+  if (json?.status === "failed" || json?.errCode || json?.errorCode && json.errorCode !== "0" || json?.code != null && json.code !== 0 && json.code !== "0") {
+    const errorCode = json.errCode || json.errorCode || json.code || "unknown";
+    const errorMessage = json.errMsg || json.errorMsg || json.msg || json.message || json.error || "Unknown API error";
+    throw new Error(`JoySpace API error ${errorCode}: ${errorMessage} (${url})`);
+  }
+  if (json?.status === "success" || json?.status === "0" || json?.status === 0) {
+    return json.data;
+  }
+  return json?.data ?? json;
+}
+async function requestJoySpaceJson({ method, url, cookieHeader, teamHeaderId, body }) {
+  const requestUrl = new URL(url, JOYSPACE_API_BASE_URL);
+  if (requestUrl.origin !== JOYSPACE_API_BASE_URL) {
+    throw new Error("JoySpace API \u5730\u5740\u4E0D\u53D7\u4FE1\u4EFB");
+  }
+  const { payload, ...requestOptions } = createJoySpaceRequestOptions({ method, cookieHeader, teamHeaderId, body });
+  return new Promise((resolve, reject) => {
+    const request = (0, import_node_https.request)(requestUrl, requestOptions, (response) => {
+      const chunks = [];
+      let responseBytes = 0;
+      response.on("data", (chunk) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        responseBytes += buffer.length;
+        if (responseBytes > MAX_RESPONSE_BYTES) {
+          request.destroy(new Error("JoySpace \u54CD\u5E94\u8D85\u8FC7 10 MB \u9650\u5236"));
+          return;
+        }
+        chunks.push(buffer);
+      });
+      response.on("end", () => {
+        const statusCode = response.statusCode || 0;
+        if (statusCode < 200 || statusCode >= 300) {
+          reject(new Error(`${requestUrl.pathname}${requestUrl.search} HTTP ${statusCode} ${response.statusMessage || ""}`.trim()));
+          return;
+        }
+        try {
+          const json = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+          resolve(parseJoySpaceResponse(json, `${requestUrl.pathname}${requestUrl.search}`));
+        } catch (error) {
+          reject(error);
+        }
+      });
+      response.on("error", reject);
+    });
+    request.setTimeout(6e4, () => {
+      request.destroy(new Error("JoySpace \u8BF7\u6C42\u8D85\u65F6"));
+    });
+    request.on("error", reject);
+    if (payload) {
+      request.write(payload);
+    }
+    request.end();
+  });
+}
+var import_node_https, JOYSPACE_API_BASE_URL, MAX_RESPONSE_BYTES;
+var init_joyspace_http = __esm({
+  "src/infrastructure/joyspace-http.mjs"() {
+    import_node_https = require("node:https");
+    JOYSPACE_API_BASE_URL = "https://apijoyspace.jd.com";
+    MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+  }
+});
+
 // src/services/import-markdown-doc.mjs
 var import_markdown_doc_exports = {};
 __export(import_markdown_doc_exports, {
@@ -194,31 +272,6 @@ async function resolveAuth({ pythonExecutable } = {}) {
     `Unable to resolve JoySpace auth from browser cookies. ${browserCookies.error || "No jd.com cookies found in supported browsers"}. Please install browser_cookie3 and login to joyspace.jd.com / jd.com in Chrome, then retry.`
   );
 }
-async function requestJoySpaceJson({ method, url, cookieHeader, teamHeaderId, body }) {
-  const response = await fetch(`${DEFAULT_JOYSPACE_API_BASE}${url}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      Cookie: cookieHeader,
-      "x-team-id": teamHeaderId
-    },
-    body: body ? JSON.stringify(body) : void 0
-  });
-  if (!response.ok) {
-    throw new Error(`${url} HTTP ${response.status} ${response.statusText}`);
-  }
-  const json = await response.json();
-  if (json?.status === "failed" || json?.errCode || json?.errorCode && json.errorCode !== "0" || json?.code != null && json.code !== 0 && json.code !== "0") {
-    const errorCode = json.errCode || json.errorCode || json.code || "unknown";
-    const errorMessage = json.errMsg || json.errorMsg || json.msg || json.message || json.error || "Unknown API error";
-    throw new Error(`JoySpace API error ${errorCode}: ${errorMessage} (${url})`);
-  }
-  if (json?.status === "success" || json?.status === "0" || json?.status === 0) {
-    return json.data;
-  }
-  return json.data ?? json;
-}
 function extractTeamFolderFromUrl(pageUrl) {
   const match = pageUrl.match(
     /joyspace\.jd\.com\/teams\/([A-Za-z0-9_-]+)(?:\/([A-Za-z0-9_-]+))?/i
@@ -349,14 +402,14 @@ async function publishMarkdownFile(options) {
     verified: Array.isArray(verified?.content) && verified.content.length > 0
   };
 }
-var import_node_child_process, import_promises, import_node_path, import_node_util, DEFAULT_JOYSPACE_API_BASE, TENANT_CONFIG, execFileAsync, BROWSER_COOKIE3_SCRIPT;
+var import_node_child_process, import_promises, import_node_path, import_node_util, TENANT_CONFIG, execFileAsync, BROWSER_COOKIE3_SCRIPT;
 var init_import_markdown_doc = __esm({
   "src/services/import-markdown-doc.mjs"() {
     import_node_child_process = require("node:child_process");
     import_promises = __toESM(require("node:fs/promises"), 1);
     import_node_path = __toESM(require("node:path"), 1);
     import_node_util = require("node:util");
-    DEFAULT_JOYSPACE_API_BASE = "https://apijoyspace.jd.com";
+    init_joyspace_http();
     TENANT_CONFIG = Object.freeze({
       "CN.JD.GROUP": { teamHeaderId: "00046419", ddAppId: "ee" },
       "TH.JD.GROUP": { teamHeaderId: "00046420", ddAppId: "th.ee" },
@@ -680,29 +733,6 @@ function contentToMarkdown(content) {
 
 ${body}`.trimEnd() + "\n" };
 }
-async function requestJoySpaceJson2({ method, url, cookieHeader, teamHeaderId, body }) {
-  const response = await fetch(`${DEFAULT_JOYSPACE_API_BASE2}${url}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      Cookie: cookieHeader,
-      "x-team-id": teamHeaderId
-    },
-    body: body ? JSON.stringify(body) : void 0
-  });
-  if (!response.ok) {
-    throw new Error(`${url} HTTP ${response.status} ${response.statusText}`);
-  }
-  const json = await response.json();
-  if (json?.status === "success" || json?.status === "0" || json?.status === 0) {
-    return json.data;
-  }
-  if (json?.errorCode && json.errorCode !== "0") {
-    throw new Error(json.errorMsg || json.errMsg || `${url} failed`);
-  }
-  return json.data ?? json;
-}
 async function pullJoySpaceDocumentFile(options) {
   if (!options.url) throw new Error("--url is required");
   if (!options.outputDir) throw new Error("--output-dir is required");
@@ -710,7 +740,7 @@ async function pullJoySpaceDocumentFile(options) {
   const auth = await resolveAuth(options);
   const cookieHeader = buildCookieHeader(auth);
   const { teamHeaderId } = requireTenantConfig2(options.tenantCode);
-  const data = await requestJoySpaceJson2({
+  const data = await requestJoySpaceJson({
     method: "POST",
     url: "/v1/pages/content",
     cookieHeader,
@@ -735,13 +765,13 @@ ${markdown}`;
   await import_promises2.default.writeFile(outputPath, fileContent, "utf8");
   return { pageId, title, link: joyspaceUrl, outputPath };
 }
-var import_promises2, import_node_path2, DEFAULT_JOYSPACE_API_BASE2, TENANT_CONFIG2;
+var import_promises2, import_node_path2, TENANT_CONFIG2;
 var init_pull_joyspace_doc = __esm({
   "src/services/pull-joyspace-doc.mjs"() {
     import_promises2 = __toESM(require("node:fs/promises"), 1);
     import_node_path2 = __toESM(require("node:path"), 1);
     init_import_markdown_doc();
-    DEFAULT_JOYSPACE_API_BASE2 = "https://apijoyspace.jd.com";
+    init_joyspace_http();
     TENANT_CONFIG2 = Object.freeze({
       "CN.JD.GROUP": { teamHeaderId: "00046419" },
       "TH.JD.GROUP": { teamHeaderId: "00046420" },

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildCookieHeader, resolveAuth } from "./import-markdown-doc.mjs";
+import { requestJoySpaceJson } from "../infrastructure/joyspace-http.mjs";
 
-const DEFAULT_JOYSPACE_API_BASE = "https://apijoyspace.jd.com";
 const DEFAULT_TENANT_CODE = "CN.JD.GROUP";
 const TENANT_CONFIG = Object.freeze({
   "CN.JD.GROUP": { teamHeaderId: "00046419" },
@@ -263,30 +263,6 @@ function contentToMarkdown(content) {
   const title = serializeInlineNodes(nodes[0]?.children).trim() || "untitled";
   const body = serializeBlocksToMarkdown(nodes.slice(1), { headerOffset: 1 });
   return { title, markdown: `# ${title}\n\n${body}`.trimEnd() + "\n" };
-}
-
-async function requestJoySpaceJson({ method, url, cookieHeader, teamHeaderId, body }) {
-  const response = await fetch(`${DEFAULT_JOYSPACE_API_BASE}${url}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      Cookie: cookieHeader,
-      "x-team-id": teamHeaderId,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!response.ok) {
-    throw new Error(`${url} HTTP ${response.status} ${response.statusText}`);
-  }
-  const json = await response.json();
-  if (json?.status === "success" || json?.status === "0" || json?.status === 0) {
-    return json.data;
-  }
-  if (json?.errorCode && json.errorCode !== "0") {
-    throw new Error(json.errorMsg || json.errMsg || `${url} failed`);
-  }
-  return json.data ?? json;
 }
 
 function parseArgs(argv) {

@@ -2,6 +2,8 @@
   "name": "obsidian-joyspace-publisher",
   "version": "0.7.0",
   "private": true,
+  "author": "Cynthia Ding",
+  "license": "MIT",
   "description": "Publish, update, and import Markdown documents with JoySpace.",
   "scripts": {
     "build": "node esbuild.config.mjs production",

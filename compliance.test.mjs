@@ -24,3 +24,18 @@ test("生产运行时不解析额外发布脚本路径", async () => {
   assert.match(source, /publishMarkdownFile/);
   assert.match(source, /pullJoySpaceDocumentFile/);
 });
+
+/** 验证 JoySpace 认证请求不会使用会过滤 Cookie 头的渲染进程 fetch */
+test("JoySpace API 统一使用 Node HTTPS 客户端", async () => {
+  /** 发布服务源码 */
+  const publishSource = await readFile(new URL("./src/services/import-markdown-doc.mjs", import.meta.url), "utf8");
+  /** 拉取服务源码 */
+  const pullSource = await readFile(new URL("./src/services/pull-joyspace-doc.mjs", import.meta.url), "utf8");
+  /** Node HTTPS 基础设施源码 */
+  const httpSource = await readFile(new URL("./src/infrastructure/joyspace-http.mjs", import.meta.url), "utf8");
+
+  assert.doesNotMatch(publishSource, /\bfetch\s*\(/);
+  assert.doesNotMatch(pullSource, /\bfetch\s*\(/);
+  assert.match(httpSource, /node:https/);
+  assert.match(httpSource, /Cookie: cookieHeader/);
+});

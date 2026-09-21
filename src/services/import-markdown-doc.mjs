@@ -2,8 +2,8 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { requestJoySpaceJson } from "../infrastructure/joyspace-http.mjs";
 
-const DEFAULT_JOYSPACE_API_BASE = "https://apijoyspace.jd.com";
 const DEFAULT_TENANT_CODE = "CN.JD.GROUP";
 
 const TENANT_CONFIG = Object.freeze({
@@ -257,47 +257,6 @@ async function resolveAuth({ pythonExecutable } = {}) {
   throw new Error(
     `Unable to resolve JoySpace auth from browser cookies. ${browserCookies.error || "No jd.com cookies found in supported browsers"}. Please install browser_cookie3 and login to joyspace.jd.com / jd.com in Chrome, then retry.`,
   );
-}
-
-async function requestJoySpaceJson({ method, url, cookieHeader, teamHeaderId, body }) {
-  const response = await fetch(`${DEFAULT_JOYSPACE_API_BASE}${url}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      Cookie: cookieHeader,
-      "x-team-id": teamHeaderId,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (!response.ok) {
-    throw new Error(`${url} HTTP ${response.status} ${response.statusText}`);
-  }
-
-  const json = await response.json();
-  if (
-    json?.status === "failed" ||
-    json?.errCode ||
-    (json?.errorCode && json.errorCode !== "0") ||
-    (json?.code != null && json.code !== 0 && json.code !== "0")
-  ) {
-    /** JoySpace 业务失败时返回的错误码 */
-    const errorCode = json.errCode || json.errorCode || json.code || "unknown";
-    /** JoySpace 业务失败时返回的可读错误信息 */
-    const errorMessage =
-      json.errMsg ||
-      json.errorMsg ||
-      json.msg ||
-      json.message ||
-      json.error ||
-      "Unknown API error";
-    throw new Error(`JoySpace API error ${errorCode}: ${errorMessage} (${url})`);
-  }
-  if (json?.status === "success" || json?.status === "0" || json?.status === 0) {
-    return json.data;
-  }
-  return json.data ?? json;
 }
 
 /** 从 JoySpace 团队或目录链接中提取新文档的直接存放位置 */
