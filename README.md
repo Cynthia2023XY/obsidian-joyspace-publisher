@@ -1,84 +1,86 @@
 # JoySpace Publisher
 
-Obsidian 桌面端插件：一键将当前 Markdown 文档发布或更新到 JoySpace。
+Publish, update, and import Markdown documents between Obsidian and JoySpace.
 
-## 功能
+## Features
 
-- 左侧工具栏点击发布/更新当前 Markdown。
-- 命令面板执行“发布/更新当前文档到 JoySpace”。
-- 默认首次发布到 JoySpace 私人空间根目录。
-- 可指定一个 JoySpace 页面，将新文档创建到该页面所在目录。
-- 首次发布成功后写入 `joyspace-page-id`、`joyspace-url`、`joyspace-sync-hash`。
-- 后续更新会复用原 JoySpace 页面链接，并在内容无变化时跳过。
-- 可在上传时提升章节标题层级。
-- 发布或更新成功后可自动打开 JoySpace 文档。
-- 可输入 JoySpace 链接，将普通文档通过接口拉取为 Markdown 到当前目录。
+- Publish the active Markdown document to a JoySpace folder or private-space root.
+- Update a previously bound JoySpace page and skip unchanged content.
+- Override the default destination with `joyspace-target-page-url` in frontmatter.
+- Import a JoySpace regular document into the current Obsidian folder.
+- Optionally promote section headings and open the JoySpace page after publishing.
 
-## 分发文件
+## Requirements
 
-将以下文件一起发送给使用者，不能只发送上传脚本：
+- Obsidian desktop.
+- Python 3 with [`browser_cookie3`](https://pypi.org/project/browser-cookie3/) installed by the user.
+- Chrome or another supported browser signed in to `joyspace.jd.com` and `jd.com`.
+- `webcli` for updating pages that were already published.
 
-```text
-main.js
-manifest.json
-import_markdown_doc.mjs
-pull_joyspace_doc.mjs
-README.md
-```
-
-内置上传脚本使用 `.mjs` 扩展名，Node 会自动按照 ES Module 执行，不需要额外的 `package.json`。
-
-## 安装
-
-将本目录复制或软链接到 Obsidian 仓库：
-
-```bash
-ln -s \
-  /Users/dingxinyi.2/Documents/practice/obsidian-joyspace-publisher \
-  "<你的仓库路径>/.obsidian/plugins/joyspace-publisher"
-```
-
-然后在 Obsidian 的“设置 → 第三方插件”中启用 `JoySpace Publisher`。
-
-## 运行要求
-
-- Obsidian 桌面端。
-- 本机可执行 `node`、`python3` 和 `webcli`。
-- Chrome 已登录 `joyspace.jd.com` / `jd.com`。
-- 插件目录中存在内置的 `import_markdown_doc.mjs`。
-
-插件始终自动使用内置脚本，不需要配置上传脚本路径。
-
-插件启用时会通过用户登录 Shell 自动执行：
-
-```bash
-which node
-which python3
-which webcli
-```
-
-检测结果会自动写入插件设置，并会检查当前 Python 是否已安装 `browser_cookie3`。如果缺少该依赖，插件会自动执行：
+The plugin never installs or updates local dependencies. Install the Python dependency manually when needed:
 
 ```bash
 python3 -m pip install --user browser_cookie3
 ```
 
-更换 Node 或 Python 后，可以在设置页点击“重新检测并安装”。如果首次启用时受网络或权限影响没有安装成功，点击上传时插件也会再次尝试安装依赖。
+Use **Settings → JoySpace Publisher → Recheck environment** after changing Python or WebCLI.
 
-## 使用
+## Installation
 
-打开一个 Markdown 文档，然后点击左侧上传图标，或在命令面板执行：
-
-```text
-JoySpace Publisher: 发布/更新当前文档到 JoySpace
-```
-
-首次发布会创建新的 JoySpace 页面，并把绑定信息写入当前 Markdown 的 YAML frontmatter。之后再次执行同一命令，会使用 WebCLI 将本地 Markdown 单向覆盖更新到原 JoySpace 页面。
-
-也可以执行：
+A release installation contains only:
 
 ```text
-JoySpace Publisher: 从 JoySpace 链接拉取文档到当前目录
+main.js
+manifest.json
 ```
 
-输入 JoySpace 普通文档链接后，插件会通过 `POST https://apijoyspace.jd.com/v1/pages/content` 拉取文档内容，转换为 Markdown 并保存到当前打开文件所在目录。
+Copy those files into `<vault>/.obsidian/plugins/joyspace-publisher/`, then enable **JoySpace Publisher** under Community plugins.
+
+## Usage
+
+Open a Markdown document and run one of these commands:
+
+- **Publish/update active document to JoySpace**
+- **Update active document on the bound JoySpace page**
+- **Import document from a JoySpace link into the current folder**
+
+After the first successful publish, the plugin writes these fields to the document frontmatter:
+
+```yaml
+joyspace-page-id: "..."
+joyspace-url: "https://joyspace.jd.com/pages/..."
+joyspace-sync-hash: "..."
+joyspace-synced-at: "..."
+```
+
+To override the default destination for one document, add:
+
+```yaml
+joyspace-target-page-url: "https://joyspace.jd.com/teams/<team-id>/<folder-id>"
+```
+
+## Privacy and network usage
+
+- The plugin connects to `https://apijoyspace.jd.com` to create pages, inspect destination information, and retrieve regular-document content.
+- It opens `https://joyspace.jd.com` links only after a successful operation and only when the corresponding setting is enabled.
+- Publishing sends the active document title, Markdown body, selected tenant, and destination information to JoySpace.
+- Importing sends the requested JoySpace page ID and saves the returned content inside the current vault.
+- Authentication reads browser cookies for `jd.com` from supported local browser profiles through the user-installed `browser_cookie3` package. Cookies are used only to authenticate requests to JoySpace; the plugin does not write them to plugin settings, note files, or an author-controlled service.
+- Updating an existing page invokes the locally installed `webcli` executable with an argument array. Reading browser login state invokes the configured Python executable. The plugin does not concatenate document content into a shell command.
+- Temporary Markdown files used for WebCLI updates are created in the operating system temporary directory and removed after success or failure.
+- The plugin contains no client-side analytics, telemetry, advertising, or author-controlled data collection service.
+- Plugin settings remain in the vault's Obsidian plugin data after the plugin is disabled. Frontmatter written to notes also remains until the user removes it. Uninstalling the plugin directory removes its settings but does not alter note frontmatter.
+
+## Development
+
+```bash
+npm install
+npm test
+npm run build
+```
+
+The production build bundles project-owned runtime modules into a single CommonJS `main.js`. `obsidian` and `electron` remain runtime externals provided by the desktop app.
+
+## License
+
+A project license must be selected before submitting this plugin to the Obsidian Community Directory.

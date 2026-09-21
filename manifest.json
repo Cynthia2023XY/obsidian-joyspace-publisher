@@ -3,7 +3,7 @@
   "name": "JoySpace Publisher",
   "version": "0.7.0",
   "minAppVersion": "1.5.0",
-  "description": "一键将当前 Markdown 文档发布或更新到 JoySpace。",
+  "description": "Publish, update, and import Markdown documents with JoySpace.",
   "author": "dingxinyi",
   "isDesktopOnly": true
 }

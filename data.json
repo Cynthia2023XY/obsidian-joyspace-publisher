@@ -1,9 +1,0 @@
-{
-  "nodeExecutable": "/Users/dingxinyi.2/.nvm/versions/node/v20.20.2/bin/node",
-  "pythonExecutable": "/opt/homebrew/bin/python3",
-  "targetPageUrl": "",
-  "tenantCode": "CN.JD.GROUP",
-  "promoteSectionHeadings": false,
-  "openAfterUpload": true,
-  "webcliExecutable": "/Users/dingxinyi.2/.nvm/versions/node/v20.20.2/bin/webcli"
-}

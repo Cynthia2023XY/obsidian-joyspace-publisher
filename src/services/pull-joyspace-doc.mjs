@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { buildCookieHeader, resolveAuth } from "./import_markdown_doc.mjs";
+import { buildCookieHeader, resolveAuth } from "./import-markdown-doc.mjs";
 
 const DEFAULT_JOYSPACE_API_BASE = "https://apijoyspace.jd.com";
 const DEFAULT_TENANT_CODE = "CN.JD.GROUP";
@@ -314,8 +312,8 @@ function parseArgs(argv) {
   return options;
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
+/** 拉取 JoySpace 普通文档并写入指定目录 */
+async function pullJoySpaceDocumentFile(options) {
   if (!options.url) throw new Error("--url is required");
   if (!options.outputDir) throw new Error("--output-dir is required");
   const pageId = extractPageId(options.url);
@@ -339,17 +337,7 @@ async function main() {
   const joyspaceUrl = `https://joyspace.jd.com/pages/${pageId}`;
   const fileContent = `---\njoyspace-page-id: ${yamlString(pageId)}\njoyspace-url: ${yamlString(joyspaceUrl)}\njoyspace-imported-at: ${yamlString(new Date().toISOString())}\n---\n\n${markdown}`;
   await fs.writeFile(outputPath, fileContent, "utf8");
-  console.log(JSON.stringify({ pageId, title, link: joyspaceUrl, outputPath }, null, 2));
+  return { pageId, title, link: joyspaceUrl, outputPath };
 }
 
-const currentModuleRealPath = realpathSync(fileURLToPath(import.meta.url));
-const invokedScriptRealPath = process.argv[1] ? realpathSync(path.resolve(process.argv[1])) : "";
-
-if (invokedScriptRealPath === currentModuleRealPath) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
-}
-
-export { contentToMarkdown, extractPageId };
+export { contentToMarkdown, extractPageId, pullJoySpaceDocumentFile };

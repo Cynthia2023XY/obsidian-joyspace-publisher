@@ -1,8 +1,6 @@
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const DEFAULT_JOYSPACE_API_BASE = "https://apijoyspace.jd.com";
@@ -244,8 +242,10 @@ export function buildCreatePagePayload({ title, markdown, teamId, folderId }) {
   return payload;
 }
 
-async function resolveAuth() {
-  const browserCookies = await loadJdCookiesFromBrowser();
+/** 从用户本机浏览器读取 JoySpace 请求所需登录态 */
+async function resolveAuth({ pythonExecutable } = {}) {
+  /** 指定 Python 环境读取到的浏览器 Cookie 结果 */
+  const browserCookies = await loadJdCookiesFromBrowser({ pythonCommand: pythonExecutable || process.env.PYTHON || "python3" });
   if (Object.keys(browserCookies.cookies).length > 0) {
     return {
       mode: "browser",
@@ -455,8 +455,8 @@ function parseArgs(argv) {
   return options;
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
+/** 使用已解析的选项创建并验证 JoySpace 页面 */
+async function publishMarkdownFile(options) {
   if (!options.filePath) {
     throw new Error("--file is required");
   }
@@ -496,38 +496,18 @@ async function main() {
     teamHeaderId,
   });
 
-  console.log(
-    JSON.stringify(
-      {
-        authMode: auth.mode,
-        cookieSource: auth.cookieSource || undefined,
-        pageId: createdPage.pageId,
-        title: created.title || title,
-        link: createdPage.link,
-        teamId: created.team_id || created.teamId || location.teamId,
-        folderId: created.folder_id || created.folderId || location.folderId || "",
-        locationSource: location.source,
-        promotedSectionHeadings: options.promoteSectionHeadings,
-        verified: Array.isArray(verified?.content) && verified.content.length > 0,
-      },
-      null,
-      2,
-    ),
-  );
+  return {
+    authMode: auth.mode,
+    cookieSource: auth.cookieSource || undefined,
+    pageId: createdPage.pageId,
+    title: created.title || title,
+    link: createdPage.link,
+    teamId: created.team_id || created.teamId || location.teamId,
+    folderId: created.folder_id || created.folderId || location.folderId || "",
+    locationSource: location.source,
+    promotedSectionHeadings: options.promoteSectionHeadings,
+    verified: Array.isArray(verified?.content) && verified.content.length > 0,
+  };
 }
 
-/** 当前模块经过 Node 解析后的真实文件路径，用于兼容软链接插件目录 */
-const currentModuleRealPath = realpathSync(fileURLToPath(import.meta.url));
-/** 命令行入口脚本经过真实路径解析后的文件路径，用于判断当前模块是否为直接执行入口 */
-const invokedScriptRealPath = process.argv[1] ? realpathSync(path.resolve(process.argv[1])) : "";
-/** 当前脚本是否由命令行直接执行，用于避免被测试导入时触发上传流程 */
-const isDirectCliInvocation = invokedScriptRealPath === currentModuleRealPath;
-
-if (isDirectCliInvocation) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
-}
-
-export { resolveAuth };
+export { publishMarkdownFile, resolveAuth };

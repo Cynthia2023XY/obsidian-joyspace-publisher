@@ -1,0 +1,15 @@
+{
+  "name": "obsidian-joyspace-publisher",
+  "version": "0.7.0",
+  "private": true,
+  "description": "Publish, update, and import Markdown documents with JoySpace.",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "test": "node --test *.test.mjs",
+    "check": "npm run test && npm run build && node --check main.js && node release-smoke.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "obsidian": "1.13.1"
+  }
+}

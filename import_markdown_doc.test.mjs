@@ -6,7 +6,7 @@ import {
   extractTeamFolderFromUrl,
   normalizeCreatedPageResponse,
   normalizeLocationFromBasicInfo,
-} from "./import_markdown_doc.mjs";
+} from "./src/services/import-markdown-doc.mjs";
 
 /** 验证目标页面的团队和目录能被传入创建请求 */
 test("从目标页面位置构建指定目录的创建请求", () => {
