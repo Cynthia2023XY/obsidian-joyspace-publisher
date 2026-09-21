@@ -1,0 +1,35 @@
+joyspace-http.test.mjs
+  s_fa4ba503eb41f2::t_d6f886f5710daa 2,4-7,9-16,19-31,33-38
+compliance.test.mjs
+  s_fa4ba503eb41f2::t_d6f886f5710daa 27-41
+README.md
+  s_fa4ba503eb41f2::t_cfcbb5d88ed538 86
+manifest.json
+  s_fa4ba503eb41f2::t_cfcbb5d88ed538 7
+LICENSE
+  s_fa4ba503eb41f2::t_cfcbb5d88ed538 1-21
+src/services/import-markdown-doc.mjs
+  s_fa4ba503eb41f2::t_07c1124930b635 5
+package.json
+  s_fa4ba503eb41f2::t_56bd7cbebf23f3 5-6
+src/infrastructure/joyspace-http.mjs
+  s_fa4ba503eb41f2::t_07c1124930b635 1-17,19-20,22,25-26,33-37,42-95,97
+src/services/pull-joyspace-doc.mjs
+  s_fa4ba503eb41f2::t_07c1124930b635 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "62ba94eeb6943dad02b847cddefcbc39c231fe35",
+  "prompts": {},
+  "sessions": {
+    "s_fa4ba503eb41f2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c1d1-3ece-74e0-bb75-b664d3eecd05",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "dingxinyi.2 <dingxinyi.2@jd.com>"
+    }
+  }
+}
