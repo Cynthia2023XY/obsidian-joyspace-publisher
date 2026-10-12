@@ -17,6 +17,9 @@ const { publishMarkdownFile } = require("./services/import-markdown-doc.mjs");
 /** 已打包到主程序中的 JoySpace 拉取能力 */
 const { pullJoySpaceDocumentFile } = require("./services/pull-joyspace-doc.mjs");
 
+/** 一层引用收集与上传副本转换能力 */
+const { collectNoteReferences, replaceNoteReferences } = require("./domain/note-references.js");
+
 /** 文档 YAML 中用于指定 JoySpace 发布目录的字段名 */
 const JOYSPACE_TARGET_PAGE_URL_KEY = "joyspace-target-page-url";
 
@@ -89,6 +92,17 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
         if (canPublish && !checking) {
           void this.publishOrUpdateActiveMarkdown();
         }
+        return canPublish;
+      },
+    });
+
+    this.addCommand({
+      id: "publish-active-markdown-with-references-to-joyspace",
+      name: "发布/更新当前笔记及一层引用到 JoySpace",
+      checkCallback: (checking) => {
+        // 当前活动笔记是否适用引用发布命令
+        const canPublish = this.app.workspace.getActiveFile()?.extension === "md";
+        if (canPublish && !checking) void this.runActivePublish({ includeReferences: true });
         return canPublish;
       },
     });
@@ -288,95 +302,162 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     });
   }
 
+  /** 普通发布沿用当前笔记已保存的引用转换模式 */
   async publishOrUpdateActiveMarkdown() {
-    const activeFile = this.app.workspace.getActiveFile();
-    const cache = activeFile ? this.app.metadataCache.getFileCache(activeFile) : null;
-    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
-    if (pageId) {
-      await this.updateActiveMarkdown();
-      return;
-    }
-    await this.publishActiveMarkdown();
+    await this.runActivePublish();
   }
 
-  /** 上传当前打开的 Markdown 文件并反馈执行结果 */
+  /** 兼容原有单篇发布入口 */
   async publishActiveMarkdown() {
-    /** 当前编辑器中打开的文件 */
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile || activeFile.extension !== "md") {
+    await this.runActivePublish();
+  }
+
+  /** 从当前笔记正文和宿主索引生成一层引用计划 */
+  async readPublishPlan(file) {
+    // 本次发布读取的正文快照与引用索引
+    const raw = await this.app.vault.read(file);
+    // 本次操作对应的笔记属性和索引
+    const cache = this.app.metadataCache.getFileCache(file);
+    return { raw, cache, ...collectNoteReferences(raw, file, cache,
+      (linkpath, sourcePath) => this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath)) };
+  }
+
+  /** 执行单篇或一层引用发布，统一处理进度、失败和并发命令 */
+  async runActivePublish({ includeReferences = false, updateOnly = false } = {}) {
+    if (this.publishing) {
+      new Notice("已有 JoySpace 发布任务正在执行，请等待完成");
+      return;
+    }
+    // 固定本次发布对象，切换编辑器不会改变上传目标
+    const file = this.app.workspace.getActiveFile();
+    if (file?.extension !== "md") {
       new Notice("请先打开一个 Markdown 文档");
       return;
     }
-
-    /** 当前仓库使用的文件适配器 */
-    const adapter = this.app.vault.adapter;
-    if (!(adapter instanceof FileSystemAdapter)) {
+    if (!(this.app.vault.adapter instanceof FileSystemAdapter)) {
       new Notice("JoySpace 上传仅支持 Obsidian 桌面端本地仓库");
       return;
     }
-
-    /** 当前 Markdown 文件的绝对路径 */
-    const markdownPath = adapter.getFullPath(activeFile.path);
-    /** 用户配置的 Python 可执行文件路径或命令 */
-    const pythonExecutable = this.settings.pythonExecutable.trim();
-
+    this.publishing = true;
+    // 已完成和当前执行对象用于报告部分成功
+    const completed = [];
+    // 当前正在执行的笔记路径，用于定位中途失败
+    let current = file.path;
     try {
-      if (pythonExecutable.includes("/")) {
-        await access(pythonExecutable);
+      // 当前文件绑定与持久化的转换模式
+      const cache = this.app.metadataCache.getFileCache(file);
+      if (updateOnly && !this.getFrontmatterValue(cache, "joyspace-page-id")) {
+        throw new Error("当前文档未绑定 JoySpace 页面，请先发布一次");
       }
-    } catch {
-      new Notice("Python 可执行文件不存在，请检查插件设置", 8000);
-      return;
-    }
-
-    /** 当前 Python 是否已经安装读取 JoySpace 登录态所需依赖 */
-    const hasCookieDependency = await this.hasBrowserCookieDependency(pythonExecutable);
-    if (!hasCookieDependency) {
-      new Notice("缺少 browser_cookie3。请在终端手动执行：python3 -m pip install --user browser_cookie3", 12000);
-      return;
-    }
-
-    const originalMarkdown = await this.app.vault.read(activeFile);
-    const prepared = this.prepareJoySpaceMarkdown(originalMarkdown, activeFile);
-    /** 当前文档的 YAML 元数据缓存 */
-    const cache = this.app.metadataCache.getFileCache(activeFile);
-    /** 按文档 YAML 优先级解析后的 JoySpace 目录定位链接 */
-    const targetPageUrl = resolveTargetPageUrl(cache?.frontmatter, this.settings.targetPageUrl);
-
-    new Notice(`正在上传《${activeFile.basename}》到 JoySpace...`);
-
-    try {
-      /** 内置发布模块返回的结构化结果 */
-      const result = await publishMarkdownFile({
-        filePath: markdownPath,
-        pageUrl: targetPageUrl,
-        tenantCode: this.settings.tenantCode,
-        promoteSectionHeadings: this.settings.promoteSectionHeadings,
-        pythonExecutable,
-      });
-      if (!result.link || !result.pageId) {
-        throw new Error("发布服务未返回有效的 JoySpace 文档地址");
+      // 是否保留一层引用转换模式
+      const referenceMode = includeReferences || this.getFrontmatterValue(cache, "joyspace-reference-mode") === "direct";
+      // 固定的一级引用发布计划
+      const plan = referenceMode ? await this.readPublishPlan(file) : null;
+      // 直接引用笔记与已发布地址的映射
+      const urls = new Map();
+      if (includeReferences) {
+        // 预检所有直接引用，之后只对这一固定集合执行发布
+        new Notice(`共 ${plan.files.length} 篇引用笔记；各篇使用自身发布目录配置，未配置时使用插件默认目录`, 8000);
+        for (const [index, referenceFile] of plan.files.entries()) {
+          current = referenceFile.path;
+          new Notice(`正在处理引用 ${index + 1}/${plan.files.length}：${referenceFile.basename}`);
+          // 引用笔记只沿用已有转换模式，不上传其下一级引用
+          const result = await this.publishMarkdownNote(referenceFile);
+          urls.set(referenceFile.path, result.link);
+          completed.push(referenceFile.path);
+        }
+      } else if (plan) {
+        // 普通更新只使用已绑定引用链接，不自动扩大上传范围
+        for (const referenceFile of plan.files) {
+          // 被引用笔记的已绑定页面地址
+          const url = this.resolveJoySpaceUrl(this.app.metadataCache.getFileCache(referenceFile));
+          if (!url) throw new Error(`引用笔记尚未绑定 JoySpace：${referenceFile.path}，请运行一层引用发布命令`);
+          urls.set(referenceFile.path, url);
+        }
       }
-
-      await this.saveJoySpaceFrontmatter(activeFile, {
-        "joyspace-page-id": result.pageId,
-        "joyspace-url": result.link,
-        "joyspace-sync-hash": prepared.hash,
-        "joyspace-synced-at": new Date().toISOString(),
-      });
-
-      new Notice(`已上传到 JoySpace：${result.title || activeFile.basename}`, 6000);
-      console.info("[JoySpace Publisher] 上传成功：", result);
-
-      if (this.settings.openAfterUpload) {
-        await shell.openExternal(normalizeJoySpaceDocumentUrl(result.link));
+      current = file.path;
+      // 上传期间若正文发生变化，停止主文档发布，避免错误覆盖
+      if (plan && this.stripYamlFrontmatter(await this.app.vault.read(file)) !== this.stripYamlFrontmatter(plan.raw)) {
+        throw new Error("当前笔记正文已变化，请重新执行发布");
       }
+      // 指定文件的发布或更新结果
+      const result = await this.publishMarkdownNote(file, plan ? {
+        raw: replaceNoteReferences(plan.raw, plan.references, urls), referenceMode: true,
+      } : {});
+      new Notice(`JoySpace ${result.skipped ? "内容无变化" : "发布完成"}：${file.basename}；已处理 ${completed.length} 篇引用`, 8000);
+      if (this.settings.openAfterUpload) await shell.openExternal(result.link);
     } catch (error) {
-      /** 对用户展示的上传失败原因 */
-      const message = error?.stderr?.trim() || error?.message || String(error);
-      console.error("[JoySpace Publisher] 上传失败：", error);
-      new Notice(`JoySpace 上传失败：${message}`, 10000);
+      console.error("[JoySpace Publisher] 发布失败：", error);
+      new Notice(`JoySpace 发布停止：${current}\n${error?.message || String(error)}\n已完成：${completed.join("、") || "无"}；其余未执行，重试将复用已保存绑定`, 15000);
+    } finally {
+      this.publishing = false;
     }
+  }
+
+  /** 发布指定文件并及时保存绑定；不依赖活动编辑器，也不递归上传引用 */
+  async publishMarkdownNote(file, { raw, referenceMode = false } = {}) {
+    // 文件当前绑定决定创建或更新原页面
+    const cache = this.app.metadataCache.getFileCache(file);
+    // 已绑定的页面 ID，决定更新或新建
+    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
+    // 本次发布使用的正文副本
+    let source = raw ?? await this.app.vault.read(file);
+    if (raw === undefined && this.getFrontmatterValue(cache, "joyspace-reference-mode") === "direct") {
+      // 已使用引用转换的文件保持转换，但不继续发布引用对象
+      const plan = await this.readPublishPlan(file);
+      // 直接引用笔记与已发布地址的映射
+      const urls = new Map();
+      for (const referenceFile of plan.files) {
+        // 被引用笔记的已绑定页面地址
+        const url = this.resolveJoySpaceUrl(this.app.metadataCache.getFileCache(referenceFile));
+        if (!url) throw new Error(`引用笔记尚未绑定 JoySpace：${referenceFile.path}`);
+        urls.set(referenceFile.path, url);
+      }
+      source = replaceNoteReferences(plan.raw, plan.references, urls);
+      referenceMode = true;
+    }
+    // 标题与最终上传正文共同决定同步状态
+    const prepared = this.prepareJoySpaceMarkdown(source, file);
+    prepared.hash = crypto.createHash("sha256").update(prepared.title + "\n" + prepared.markdown, "utf8").digest("hex");
+    // 指定文件的发布或更新结果
+    let result;
+    if (pageId) {
+      // 经过校验的已绑定 JoySpace 页面地址
+      const link = this.resolveJoySpaceUrl(cache);
+      if (this.getFrontmatterValue(cache, "joyspace-sync-hash") === prepared.hash) {
+        result = { pageId, link, skipped: true };
+      } else {
+        await this.updateMarkdownNote(file, prepared, link, pageId);
+        result = { pageId, link };
+      }
+    } else {
+      // 新建页面所需 Python 依赖只在实际创建时检查
+      const pythonExecutable = this.settings.pythonExecutable.trim();
+      if (pythonExecutable.includes("/")) await access(pythonExecutable);
+      if (!await this.hasBrowserCookieDependency(pythonExecutable)) {
+        throw new Error("缺少 browser_cookie3，请手动安装并检查 Python 设置");
+      }
+      result = await publishMarkdownFile({
+        filePath: this.app.vault.adapter.getFullPath(file.path),
+        markdown: prepared.markdown, title: prepared.title, prepared: true,
+        pageUrl: resolveTargetPageUrl(cache?.frontmatter, this.settings.targetPageUrl),
+        tenantCode: this.settings.tenantCode, pythonExecutable,
+      });
+      if (!result.pageId || !result.link) throw new Error("发布服务未返回有效页面绑定");
+      result.link = normalizeJoySpaceDocumentUrl(result.link);
+      // 创建成功立即保留绑定，回读失败也能避免重试重复创建
+      await this.saveJoySpaceFrontmatter(file, {
+        "joyspace-page-id": result.pageId, "joyspace-url": result.link,
+        "joyspace-reference-mode": referenceMode ? "direct" : "none",
+      });
+      if (!result.verified) throw new Error("页面已创建并保存绑定，但正文回读验证失败，请重试更新");
+    }
+    await this.saveJoySpaceFrontmatter(file, {
+      "joyspace-page-id": result.pageId, "joyspace-url": result.link,
+      "joyspace-sync-hash": prepared.hash, "joyspace-synced-at": new Date().toISOString(),
+      "joyspace-reference-mode": referenceMode ? "direct" : "none",
+    });
+    return result;
   }
 
   getCurrentOutputDir(adapter) {
@@ -442,12 +523,15 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
 
   async execWebcli(args, cwd) {
     const webcliExecutable = this.settings.webcliExecutable.trim() || "webcli";
+    /** WebCLI 同目录下提供给 env 查找的 Node 可执行文件目录 */
+    const webcliRuntimeDirectory = path.dirname(path.resolve(webcliExecutable));
     const { stdout, stderr } = await execFileAsync(webcliExecutable, args, {
       cwd,
       timeout: 120_000,
       maxBuffer: 10 * 1024 * 1024,
       env: {
         ...process.env,
+        PATH: [webcliRuntimeDirectory, process.env.PATH || ""].filter(Boolean).join(path.delimiter),
       },
     });
     if (stderr.trim()) {
@@ -486,55 +570,26 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     return indexes.length ? Math.max(...indexes) : 0;
   }
 
+  /** 更新命令同样保留当前文档的引用转换模式 */
   async updateActiveMarkdown() {
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile || activeFile.extension !== "md") {
-      new Notice("请先打开一个 Markdown 文档");
-      return;
-    }
+    await this.runActivePublish({ updateOnly: true });
+  }
 
-    const adapter = this.app.vault.adapter;
-    if (!(adapter instanceof FileSystemAdapter)) {
-      new Notice("JoySpace 更新仅支持 Obsidian 桌面端本地仓库");
-      return;
-    }
-
-    const cache = this.app.metadataCache.getFileCache(activeFile);
-    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
-    /** 校验后用于 WebCLI 更新的 JoySpace 文档地址 */
-    let joyspaceUrl = "";
-    try {
-      joyspaceUrl = this.resolveJoySpaceUrl(cache);
-    } catch (error) {
-      /** 无效 frontmatter 地址对应的用户提示 */
-      const message = error?.message || String(error);
-      new Notice(`JoySpace 文档链接无效：${message}`, 8000);
-      return;
-    }
-    if (!pageId || !joyspaceUrl) {
-      new Notice("当前文档未绑定 JoySpace 页面，请先发布一次", 8000);
-      return;
-    }
-
-    const originalMarkdown = await this.app.vault.read(activeFile);
-    const prepared = this.prepareJoySpaceMarkdown(originalMarkdown, activeFile);
-    const lastHash = this.getFrontmatterValue(cache, "joyspace-sync-hash");
-    if (lastHash && lastHash === prepared.hash) {
-      new Notice("内容无变化，无需更新 JoySpace", 5000);
-      return;
-    }
-
-    const markdownPath = adapter.getFullPath(activeFile.path);
-    const markdownDir = path.dirname(markdownPath);
+  /** 将指定文档的最终上传副本写入已绑定页面 */
+  async updateMarkdownNote(file, prepared, joyspaceUrl, pageId) {
+    // 临时正文只供 WebCLI 读取，源文件始终保留本地双链
+    const markdownDir = path.dirname(this.app.vault.adapter.getFullPath(file.path));
+    // 本次更新专用的临时目录，结束后清理
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "joyspace-publisher-"));
-    const tempMarkdownPath = path.join(tempDir, `${activeFile.basename}.md`);
-
-    new Notice(`正在更新 JoySpace：《${activeFile.basename}》...`);
-
+    // 供 WebCLI 读取的正文副本路径
+    const tempMarkdownPath = path.join(tempDir, `${file.basename}.md`);
     try {
       await writeFile(tempMarkdownPath, prepared.markdown, "utf8");
+      // 读取更新前页面结构
       const inspectStdout = await this.execWebcli(["joyspace", "edit", joyspaceUrl, "--mode", "inspect", "-f", "json"], markdownDir);
+      // 解析页面结构结果
       const inspectOutput = this.parseWebcliJson(inspectStdout) || inspectStdout;
+      // 保留旧正文范围供写入后清理
       const lastBodyBlockIndex = this.extractLastBodyBlockIndex(inspectOutput);
 
       await this.execWebcli(
@@ -550,27 +605,14 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
       }
 
       await this.execWebcli(["joyspace", "rename", joyspaceUrl, "--name", prepared.title, "-f", "json"], markdownDir);
+      // 回读更新后的页面
       const viewStdout = await this.execWebcli(["joyspace", "view", joyspaceUrl, "-f", "json"], markdownDir);
+      // 核对页面身份和标题
       const viewText = JSON.stringify(this.parseWebcliJson(viewStdout) || viewStdout);
       if (!viewText.includes(pageId) || !viewText.includes(prepared.title)) {
         throw new Error("更新后回读验证失败，未确认页面 ID 和标题一致");
       }
 
-      await this.saveJoySpaceFrontmatter(activeFile, {
-        "joyspace-page-id": pageId,
-        "joyspace-url": joyspaceUrl,
-        "joyspace-sync-hash": prepared.hash,
-        "joyspace-synced-at": new Date().toISOString(),
-      });
-
-      new Notice(`已更新 JoySpace：${prepared.title}`, 6000);
-      if (this.settings.openAfterUpload) {
-        await shell.openExternal(joyspaceUrl);
-      }
-    } catch (error) {
-      const message = error?.stderr?.trim() || error?.message || String(error);
-      console.error("[JoySpace Publisher] 更新失败：", error);
-      new Notice(`JoySpace 更新失败：${message}`, 12000);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

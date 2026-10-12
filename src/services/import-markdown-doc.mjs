@@ -420,12 +420,15 @@ async function publishMarkdownFile(options) {
     throw new Error("--file is required");
   }
 
-  const originalMarkdown = await fs.readFile(options.filePath, "utf8");
+  // 优先使用调用方提供的上传副本，保留磁盘读取的兼容入口
+  const originalMarkdown = options.markdown ?? await fs.readFile(options.filePath, "utf8");
   /** 去除文档属性后的待上传正文，避免 Obsidian 元数据出现在 JoySpace 页面中 */
   const markdownWithoutFrontmatter = stripYamlFrontmatter(originalMarkdown);
   const title = options.title || extractTitleFromMarkdown(markdownWithoutFrontmatter, options.filePath);
-  const bodyWithoutTitle = removeFirstH1(markdownWithoutFrontmatter);
-  const markdown = options.promoteSectionHeadings
+  // 已预处理正文直接复用，防止再次移除标题
+  const bodyWithoutTitle = options.prepared ? originalMarkdown : removeFirstH1(markdownWithoutFrontmatter);
+  // 最终提交的正文只在未预处理时提升标题层级
+  const markdown = !options.prepared && options.promoteSectionHeadings
     ? promoteSectionHeadingsForJoySpace(bodyWithoutTitle)
     : bodyWithoutTitle;
   const auth = await resolveAuth(options);
@@ -449,11 +452,19 @@ async function publishMarkdownFile(options) {
   const createdPage = normalizeCreatedPageResponse(createResponse);
   /** JoySpace 创建接口返回的原始字段 */
   const created = createdPage.created;
-  const verified = await verifyJoySpacePage({
-    pageId: createdPage.pageId,
-    cookieHeader,
-    teamHeaderId,
-  });
+  // 页面创建后即使回读异常也返回绑定信息，由调用方保存以支持重试
+  let verified = null;
+  // 回读异常原因供调用方展示与排查
+  let verificationError = "";
+  try {
+    verified = await verifyJoySpacePage({
+      pageId: createdPage.pageId,
+      cookieHeader,
+      teamHeaderId,
+    });
+  } catch (error) {
+    verificationError = error?.message || String(error);
+  }
 
   return {
     authMode: auth.mode,
@@ -465,6 +476,7 @@ async function publishMarkdownFile(options) {
     folderId: created.folder_id || created.folderId || location.folderId || "",
     locationSource: location.source,
     promotedSectionHeadings: options.promoteSectionHeadings,
+    verificationError,
     verified: Array.isArray(verified?.content) && verified.content.length > 0,
   };
 }

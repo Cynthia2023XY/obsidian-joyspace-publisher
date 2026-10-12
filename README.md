@@ -41,6 +41,7 @@ Copy those files into `<vault>/.obsidian/plugins/joyspace-publisher/`, then enab
 Open a Markdown document and run one of these commands:
 
 - **Publish/update active document to JoySpace**
+- **Publish/update active note and its direct references to JoySpace**
 - **Update active document on the bound JoySpace page**
 - **Import document from a JoySpace link into the current folder**
 
@@ -59,11 +60,21 @@ To override the default destination for one document, add:
 joyspace-target-page-url: "https://joyspace.jd.com/teams/<team-id>/<folder-id>"
 ```
 
+## Publish direct references
+
+The dedicated command publishes each directly referenced Markdown note first, then publishes the current note with those references converted to JoySpace links. Repeated references are uploaded once. Referenced notes are not traversed recursively; self-links, external URLs, images and other attachments are excluded.
+
+Wiki links, aliases, Markdown note links and note embeds are supported. Embeds become ordinary links. Heading and block references link to the whole page. Each note uses its own `joyspace-target-page-url`, with the plugin destination as fallback. Local note bodies retain their Obsidian links.
+
+Missing notes stop the operation before publishing. A failed reference stops publication of the current note; completed pages remain bound and are reused on retry. The plugin saves page bindings even when creation succeeds but content verification fails. A local metadata write failure can still require manually recovering the created page binding.
+
+The current note stores `joyspace-reference-mode: direct`. Ordinary subsequent updates preserve the converted links using the currently bound references, without uploading additional notes. Run the dedicated command again to publish new references or update existing referenced notes. The sync hash covers the title and final uploaded body.
+
 ## Privacy and network usage
 
 - The plugin connects to `https://apijoyspace.jd.com` to create pages, inspect destination information, and retrieve regular-document content.
 - It opens `https://joyspace.jd.com` links only after a successful operation and only when the corresponding setting is enabled.
-- Publishing sends the active document title, Markdown body, selected tenant, and destination information to JoySpace.
+- Publishing sends the active document title, Markdown body, selected tenant, and destination information to JoySpace. The dedicated reference command also sends the directly referenced Markdown notes.
 - Importing sends the requested JoySpace page ID and saves the returned content inside the current vault.
 - Authentication reads browser cookies for `jd.com` from supported local browser profiles through the user-installed `browser_cookie3` package. Cookies are used only to authenticate requests to JoySpace; the plugin does not write them to plugin settings, note files, or an author-controlled service.
 - Updating an existing page invokes the locally installed `webcli` executable with an argument array. Reading browser login state invokes the configured Python executable. The plugin does not concatenate document content into a shell command.

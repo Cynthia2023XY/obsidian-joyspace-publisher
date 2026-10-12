@@ -12,6 +12,13 @@ var __esm = (fn, res, err) => function __init() {
     throw err = [e], e;
   }
 };
+var __commonJS = (cb, mod) => function __require() {
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -362,11 +369,11 @@ async function publishMarkdownFile(options) {
   if (!options.filePath) {
     throw new Error("--file is required");
   }
-  const originalMarkdown = await import_promises.default.readFile(options.filePath, "utf8");
+  const originalMarkdown = options.markdown ?? await import_promises.default.readFile(options.filePath, "utf8");
   const markdownWithoutFrontmatter = stripYamlFrontmatter(originalMarkdown);
   const title = options.title || extractTitleFromMarkdown(markdownWithoutFrontmatter, options.filePath);
-  const bodyWithoutTitle = removeFirstH1(markdownWithoutFrontmatter);
-  const markdown = options.promoteSectionHeadings ? promoteSectionHeadingsForJoySpace(bodyWithoutTitle) : bodyWithoutTitle;
+  const bodyWithoutTitle = options.prepared ? originalMarkdown : removeFirstH1(markdownWithoutFrontmatter);
+  const markdown = !options.prepared && options.promoteSectionHeadings ? promoteSectionHeadingsForJoySpace(bodyWithoutTitle) : bodyWithoutTitle;
   const auth = await resolveAuth(options);
   const { teamHeaderId } = requireTenantConfig(options.tenantCode);
   const cookieHeader = buildCookieHeader(auth);
@@ -384,11 +391,17 @@ async function publishMarkdownFile(options) {
   });
   const createdPage = normalizeCreatedPageResponse(createResponse);
   const created = createdPage.created;
-  const verified = await verifyJoySpacePage({
-    pageId: createdPage.pageId,
-    cookieHeader,
-    teamHeaderId
-  });
+  let verified = null;
+  let verificationError = "";
+  try {
+    verified = await verifyJoySpacePage({
+      pageId: createdPage.pageId,
+      cookieHeader,
+      teamHeaderId
+    });
+  } catch (error) {
+    verificationError = error?.message || String(error);
+  }
   return {
     authMode: auth.mode,
     cookieSource: auth.cookieSource || void 0,
@@ -399,6 +412,7 @@ async function publishMarkdownFile(options) {
     folderId: created.folder_id || created.folderId || location.folderId || "",
     locationSource: location.source,
     promotedSectionHeadings: options.promoteSectionHeadings,
+    verificationError,
     verified: Array.isArray(verified?.content) && verified.content.length > 0
   };
 }
@@ -781,6 +795,47 @@ var init_pull_joyspace_doc = __esm({
   }
 });
 
+// src/domain/note-references.js
+var require_note_references = __commonJS({
+  "src/domain/note-references.js"(exports2, module2) {
+    function collectNoteReferences2(markdown, sourceFile, cache, resolveFile) {
+      const references = [];
+      const files = /* @__PURE__ */ new Map();
+      if (!cache) throw new Error(`\u7B14\u8BB0\u7D22\u5F15\u5C1A\u672A\u5C31\u7EEA\uFF1A${sourceFile.path}\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5`);
+      for (const entry of [...cache.links || [], ...cache.embeds || []]) {
+        const link = entry.link || "";
+        if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(link) || link.startsWith("#")) continue;
+        const linkpath = link.split("#")[0];
+        const file = resolveFile(linkpath, sourceFile.path);
+        if (!file) {
+          if (/\.[a-z0-9]+$/i.test(linkpath) && !/\.md$/i.test(linkpath)) continue;
+          throw new Error(`\u627E\u4E0D\u5230\u5F15\u7528\u7B14\u8BB0\uFF1A${linkpath}\uFF08\u6765\u6E90\uFF1A${sourceFile.path}\uFF09`);
+        }
+        if (file.extension !== "md" || file.path === sourceFile.path) continue;
+        const start = entry.position.start.offset;
+        const end = entry.position.end.offset;
+        if (markdown.slice(start, end) !== entry.original) {
+          throw new Error(`\u7B14\u8BB0\u7D22\u5F15\u4E0E\u6B63\u6587\u4E0D\u540C\u6B65\uFF1A${sourceFile.path}\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5`);
+        }
+        references.push({ start, end, file, displayText: entry.displayText || file.basename });
+        files.set(file.path, file);
+      }
+      return { references, files: [...files.values()] };
+    }
+    function replaceNoteReferences2(markdown, references, urls) {
+      let result = markdown;
+      for (const reference of [...references].sort((left, right) => right.start - left.start)) {
+        const url = urls.get(reference.file.path);
+        if (!url) throw new Error(`\u5F15\u7528\u7B14\u8BB0\u5C1A\u672A\u53D1\u5E03\uFF1A${reference.file.path}`);
+        const label = reference.displayText.replace(/([\\\[\]])/g, "\\$1");
+        result = result.slice(0, reference.start) + `[${label}](${url})` + result.slice(reference.end);
+      }
+      return result;
+    }
+    module2.exports = { collectNoteReferences: collectNoteReferences2, replaceNoteReferences: replaceNoteReferences2 };
+  }
+});
+
 // src/main.js
 var { FileSystemAdapter, Modal, Notice, Plugin, PluginSettingTab, Setting } = require("obsidian");
 var { execFile: execFile2 } = require("node:child_process");
@@ -792,6 +847,7 @@ var { promisify: promisify2 } = require("node:util");
 var { shell } = require("electron");
 var { publishMarkdownFile: publishMarkdownFile2 } = (init_import_markdown_doc(), __toCommonJS(import_markdown_doc_exports));
 var { pullJoySpaceDocumentFile: pullJoySpaceDocumentFile2 } = (init_pull_joyspace_doc(), __toCommonJS(pull_joyspace_doc_exports));
+var { collectNoteReferences, replaceNoteReferences } = require_note_references();
 var JOYSPACE_TARGET_PAGE_URL_KEY = "joyspace-target-page-url";
 var resolveTargetPageUrl = (frontmatter, pluginTargetPageUrl) => {
   const documentTargetPageUrl = frontmatter?.[JOYSPACE_TARGET_PAGE_URL_KEY];
@@ -841,6 +897,15 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
         if (canPublish && !checking) {
           void this.publishOrUpdateActiveMarkdown();
         }
+        return canPublish;
+      }
+    });
+    this.addCommand({
+      id: "publish-active-markdown-with-references-to-joyspace",
+      name: "\u53D1\u5E03/\u66F4\u65B0\u5F53\u524D\u7B14\u8BB0\u53CA\u4E00\u5C42\u5F15\u7528\u5230 JoySpace",
+      checkCallback: (checking) => {
+        const canPublish = this.app.workspace.getActiveFile()?.extension === "md";
+        if (canPublish && !checking) void this.runActivePublish({ includeReferences: true });
         return canPublish;
       }
     });
@@ -1003,75 +1068,145 @@ ${pythonExecutable}`, 8e3);
       }
     });
   }
+  /** 普通发布沿用当前笔记已保存的引用转换模式 */
   async publishOrUpdateActiveMarkdown() {
-    const activeFile = this.app.workspace.getActiveFile();
-    const cache = activeFile ? this.app.metadataCache.getFileCache(activeFile) : null;
-    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
-    if (pageId) {
-      await this.updateActiveMarkdown();
+    await this.runActivePublish();
+  }
+  /** 兼容原有单篇发布入口 */
+  async publishActiveMarkdown() {
+    await this.runActivePublish();
+  }
+  /** 从当前笔记正文和宿主索引生成一层引用计划 */
+  async readPublishPlan(file) {
+    const raw = await this.app.vault.read(file);
+    const cache = this.app.metadataCache.getFileCache(file);
+    return { raw, cache, ...collectNoteReferences(
+      raw,
+      file,
+      cache,
+      (linkpath, sourcePath) => this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath)
+    ) };
+  }
+  /** 执行单篇或一层引用发布，统一处理进度、失败和并发命令 */
+  async runActivePublish({ includeReferences = false, updateOnly = false } = {}) {
+    if (this.publishing) {
+      new Notice("\u5DF2\u6709 JoySpace \u53D1\u5E03\u4EFB\u52A1\u6B63\u5728\u6267\u884C\uFF0C\u8BF7\u7B49\u5F85\u5B8C\u6210");
       return;
     }
-    await this.publishActiveMarkdown();
-  }
-  /** 上传当前打开的 Markdown 文件并反馈执行结果 */
-  async publishActiveMarkdown() {
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile || activeFile.extension !== "md") {
+    const file = this.app.workspace.getActiveFile();
+    if (file?.extension !== "md") {
       new Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A Markdown \u6587\u6863");
       return;
     }
-    const adapter = this.app.vault.adapter;
-    if (!(adapter instanceof FileSystemAdapter)) {
+    if (!(this.app.vault.adapter instanceof FileSystemAdapter)) {
       new Notice("JoySpace \u4E0A\u4F20\u4EC5\u652F\u6301 Obsidian \u684C\u9762\u7AEF\u672C\u5730\u4ED3\u5E93");
       return;
     }
-    const markdownPath = adapter.getFullPath(activeFile.path);
-    const pythonExecutable = this.settings.pythonExecutable.trim();
+    this.publishing = true;
+    const completed = [];
+    let current = file.path;
     try {
-      if (pythonExecutable.includes("/")) {
-        await access(pythonExecutable);
+      const cache = this.app.metadataCache.getFileCache(file);
+      if (updateOnly && !this.getFrontmatterValue(cache, "joyspace-page-id")) {
+        throw new Error("\u5F53\u524D\u6587\u6863\u672A\u7ED1\u5B9A JoySpace \u9875\u9762\uFF0C\u8BF7\u5148\u53D1\u5E03\u4E00\u6B21");
       }
-    } catch {
-      new Notice("Python \u53EF\u6267\u884C\u6587\u4EF6\u4E0D\u5B58\u5728\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u8BBE\u7F6E", 8e3);
-      return;
+      const referenceMode = includeReferences || this.getFrontmatterValue(cache, "joyspace-reference-mode") === "direct";
+      const plan = referenceMode ? await this.readPublishPlan(file) : null;
+      const urls = /* @__PURE__ */ new Map();
+      if (includeReferences) {
+        new Notice(`\u5171 ${plan.files.length} \u7BC7\u5F15\u7528\u7B14\u8BB0\uFF1B\u5404\u7BC7\u4F7F\u7528\u81EA\u8EAB\u53D1\u5E03\u76EE\u5F55\u914D\u7F6E\uFF0C\u672A\u914D\u7F6E\u65F6\u4F7F\u7528\u63D2\u4EF6\u9ED8\u8BA4\u76EE\u5F55`, 8e3);
+        for (const [index, referenceFile] of plan.files.entries()) {
+          current = referenceFile.path;
+          new Notice(`\u6B63\u5728\u5904\u7406\u5F15\u7528 ${index + 1}/${plan.files.length}\uFF1A${referenceFile.basename}`);
+          const result2 = await this.publishMarkdownNote(referenceFile);
+          urls.set(referenceFile.path, result2.link);
+          completed.push(referenceFile.path);
+        }
+      } else if (plan) {
+        for (const referenceFile of plan.files) {
+          const url = this.resolveJoySpaceUrl(this.app.metadataCache.getFileCache(referenceFile));
+          if (!url) throw new Error(`\u5F15\u7528\u7B14\u8BB0\u5C1A\u672A\u7ED1\u5B9A JoySpace\uFF1A${referenceFile.path}\uFF0C\u8BF7\u8FD0\u884C\u4E00\u5C42\u5F15\u7528\u53D1\u5E03\u547D\u4EE4`);
+          urls.set(referenceFile.path, url);
+        }
+      }
+      current = file.path;
+      if (plan && this.stripYamlFrontmatter(await this.app.vault.read(file)) !== this.stripYamlFrontmatter(plan.raw)) {
+        throw new Error("\u5F53\u524D\u7B14\u8BB0\u6B63\u6587\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u6267\u884C\u53D1\u5E03");
+      }
+      const result = await this.publishMarkdownNote(file, plan ? {
+        raw: replaceNoteReferences(plan.raw, plan.references, urls),
+        referenceMode: true
+      } : {});
+      new Notice(`JoySpace ${result.skipped ? "\u5185\u5BB9\u65E0\u53D8\u5316" : "\u53D1\u5E03\u5B8C\u6210"}\uFF1A${file.basename}\uFF1B\u5DF2\u5904\u7406 ${completed.length} \u7BC7\u5F15\u7528`, 8e3);
+      if (this.settings.openAfterUpload) await shell.openExternal(result.link);
+    } catch (error) {
+      console.error("[JoySpace Publisher] \u53D1\u5E03\u5931\u8D25\uFF1A", error);
+      new Notice(`JoySpace \u53D1\u5E03\u505C\u6B62\uFF1A${current}
+${error?.message || String(error)}
+\u5DF2\u5B8C\u6210\uFF1A${completed.join("\u3001") || "\u65E0"}\uFF1B\u5176\u4F59\u672A\u6267\u884C\uFF0C\u91CD\u8BD5\u5C06\u590D\u7528\u5DF2\u4FDD\u5B58\u7ED1\u5B9A`, 15e3);
+    } finally {
+      this.publishing = false;
     }
-    const hasCookieDependency = await this.hasBrowserCookieDependency(pythonExecutable);
-    if (!hasCookieDependency) {
-      new Notice("\u7F3A\u5C11 browser_cookie3\u3002\u8BF7\u5728\u7EC8\u7AEF\u624B\u52A8\u6267\u884C\uFF1Apython3 -m pip install --user browser_cookie3", 12e3);
-      return;
+  }
+  /** 发布指定文件并及时保存绑定；不依赖活动编辑器，也不递归上传引用 */
+  async publishMarkdownNote(file, { raw, referenceMode = false } = {}) {
+    const cache = this.app.metadataCache.getFileCache(file);
+    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
+    let source = raw ?? await this.app.vault.read(file);
+    if (raw === void 0 && this.getFrontmatterValue(cache, "joyspace-reference-mode") === "direct") {
+      const plan = await this.readPublishPlan(file);
+      const urls = /* @__PURE__ */ new Map();
+      for (const referenceFile of plan.files) {
+        const url = this.resolveJoySpaceUrl(this.app.metadataCache.getFileCache(referenceFile));
+        if (!url) throw new Error(`\u5F15\u7528\u7B14\u8BB0\u5C1A\u672A\u7ED1\u5B9A JoySpace\uFF1A${referenceFile.path}`);
+        urls.set(referenceFile.path, url);
+      }
+      source = replaceNoteReferences(plan.raw, plan.references, urls);
+      referenceMode = true;
     }
-    const originalMarkdown = await this.app.vault.read(activeFile);
-    const prepared = this.prepareJoySpaceMarkdown(originalMarkdown, activeFile);
-    const cache = this.app.metadataCache.getFileCache(activeFile);
-    const targetPageUrl = resolveTargetPageUrl(cache?.frontmatter, this.settings.targetPageUrl);
-    new Notice(`\u6B63\u5728\u4E0A\u4F20\u300A${activeFile.basename}\u300B\u5230 JoySpace...`);
-    try {
-      const result = await publishMarkdownFile2({
-        filePath: markdownPath,
-        pageUrl: targetPageUrl,
+    const prepared = this.prepareJoySpaceMarkdown(source, file);
+    prepared.hash = crypto.createHash("sha256").update(prepared.title + "\n" + prepared.markdown, "utf8").digest("hex");
+    let result;
+    if (pageId) {
+      const link = this.resolveJoySpaceUrl(cache);
+      if (this.getFrontmatterValue(cache, "joyspace-sync-hash") === prepared.hash) {
+        result = { pageId, link, skipped: true };
+      } else {
+        await this.updateMarkdownNote(file, prepared, link, pageId);
+        result = { pageId, link };
+      }
+    } else {
+      const pythonExecutable = this.settings.pythonExecutable.trim();
+      if (pythonExecutable.includes("/")) await access(pythonExecutable);
+      if (!await this.hasBrowserCookieDependency(pythonExecutable)) {
+        throw new Error("\u7F3A\u5C11 browser_cookie3\uFF0C\u8BF7\u624B\u52A8\u5B89\u88C5\u5E76\u68C0\u67E5 Python \u8BBE\u7F6E");
+      }
+      result = await publishMarkdownFile2({
+        filePath: this.app.vault.adapter.getFullPath(file.path),
+        markdown: prepared.markdown,
+        title: prepared.title,
+        prepared: true,
+        pageUrl: resolveTargetPageUrl(cache?.frontmatter, this.settings.targetPageUrl),
         tenantCode: this.settings.tenantCode,
-        promoteSectionHeadings: this.settings.promoteSectionHeadings,
         pythonExecutable
       });
-      if (!result.link || !result.pageId) {
-        throw new Error("\u53D1\u5E03\u670D\u52A1\u672A\u8FD4\u56DE\u6709\u6548\u7684 JoySpace \u6587\u6863\u5730\u5740");
-      }
-      await this.saveJoySpaceFrontmatter(activeFile, {
+      if (!result.pageId || !result.link) throw new Error("\u53D1\u5E03\u670D\u52A1\u672A\u8FD4\u56DE\u6709\u6548\u9875\u9762\u7ED1\u5B9A");
+      result.link = normalizeJoySpaceDocumentUrl(result.link);
+      await this.saveJoySpaceFrontmatter(file, {
         "joyspace-page-id": result.pageId,
         "joyspace-url": result.link,
-        "joyspace-sync-hash": prepared.hash,
-        "joyspace-synced-at": (/* @__PURE__ */ new Date()).toISOString()
+        "joyspace-reference-mode": referenceMode ? "direct" : "none"
       });
-      new Notice(`\u5DF2\u4E0A\u4F20\u5230 JoySpace\uFF1A${result.title || activeFile.basename}`, 6e3);
-      console.info("[JoySpace Publisher] \u4E0A\u4F20\u6210\u529F\uFF1A", result);
-      if (this.settings.openAfterUpload) {
-        await shell.openExternal(normalizeJoySpaceDocumentUrl(result.link));
-      }
-    } catch (error) {
-      const message = error?.stderr?.trim() || error?.message || String(error);
-      console.error("[JoySpace Publisher] \u4E0A\u4F20\u5931\u8D25\uFF1A", error);
-      new Notice(`JoySpace \u4E0A\u4F20\u5931\u8D25\uFF1A${message}`, 1e4);
+      if (!result.verified) throw new Error("\u9875\u9762\u5DF2\u521B\u5EFA\u5E76\u4FDD\u5B58\u7ED1\u5B9A\uFF0C\u4F46\u6B63\u6587\u56DE\u8BFB\u9A8C\u8BC1\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u66F4\u65B0");
     }
+    await this.saveJoySpaceFrontmatter(file, {
+      "joyspace-page-id": result.pageId,
+      "joyspace-url": result.link,
+      "joyspace-sync-hash": prepared.hash,
+      "joyspace-synced-at": (/* @__PURE__ */ new Date()).toISOString(),
+      "joyspace-reference-mode": referenceMode ? "direct" : "none"
+    });
+    return result;
   }
   getCurrentOutputDir(adapter) {
     const activeFile = this.app.workspace.getActiveFile();
@@ -1129,12 +1264,14 @@ ${pythonExecutable}`, 8e3);
   }
   async execWebcli(args, cwd) {
     const webcliExecutable = this.settings.webcliExecutable.trim() || "webcli";
+    const webcliRuntimeDirectory = path3.dirname(path3.resolve(webcliExecutable));
     const { stdout, stderr } = await execFileAsync2(webcliExecutable, args, {
       cwd,
       timeout: 12e4,
       maxBuffer: 10 * 1024 * 1024,
       env: {
-        ...process.env
+        ...process.env,
+        PATH: [webcliRuntimeDirectory, process.env.PATH || ""].filter(Boolean).join(path3.delimiter)
       }
     });
     if (stderr.trim()) {
@@ -1169,43 +1306,15 @@ ${pythonExecutable}`, 8e3);
     const indexes = [...text.matchAll(/\[(\d+)]/g)].map((match) => Number(match[1])).filter((index) => index > 0);
     return indexes.length ? Math.max(...indexes) : 0;
   }
+  /** 更新命令同样保留当前文档的引用转换模式 */
   async updateActiveMarkdown() {
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile || activeFile.extension !== "md") {
-      new Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A Markdown \u6587\u6863");
-      return;
-    }
-    const adapter = this.app.vault.adapter;
-    if (!(adapter instanceof FileSystemAdapter)) {
-      new Notice("JoySpace \u66F4\u65B0\u4EC5\u652F\u6301 Obsidian \u684C\u9762\u7AEF\u672C\u5730\u4ED3\u5E93");
-      return;
-    }
-    const cache = this.app.metadataCache.getFileCache(activeFile);
-    const pageId = this.getFrontmatterValue(cache, "joyspace-page-id");
-    let joyspaceUrl = "";
-    try {
-      joyspaceUrl = this.resolveJoySpaceUrl(cache);
-    } catch (error) {
-      const message = error?.message || String(error);
-      new Notice(`JoySpace \u6587\u6863\u94FE\u63A5\u65E0\u6548\uFF1A${message}`, 8e3);
-      return;
-    }
-    if (!pageId || !joyspaceUrl) {
-      new Notice("\u5F53\u524D\u6587\u6863\u672A\u7ED1\u5B9A JoySpace \u9875\u9762\uFF0C\u8BF7\u5148\u53D1\u5E03\u4E00\u6B21", 8e3);
-      return;
-    }
-    const originalMarkdown = await this.app.vault.read(activeFile);
-    const prepared = this.prepareJoySpaceMarkdown(originalMarkdown, activeFile);
-    const lastHash = this.getFrontmatterValue(cache, "joyspace-sync-hash");
-    if (lastHash && lastHash === prepared.hash) {
-      new Notice("\u5185\u5BB9\u65E0\u53D8\u5316\uFF0C\u65E0\u9700\u66F4\u65B0 JoySpace", 5e3);
-      return;
-    }
-    const markdownPath = adapter.getFullPath(activeFile.path);
-    const markdownDir = path3.dirname(markdownPath);
+    await this.runActivePublish({ updateOnly: true });
+  }
+  /** 将指定文档的最终上传副本写入已绑定页面 */
+  async updateMarkdownNote(file, prepared, joyspaceUrl, pageId) {
+    const markdownDir = path3.dirname(this.app.vault.adapter.getFullPath(file.path));
     const tempDir = await mkdtemp(path3.join(os.tmpdir(), "joyspace-publisher-"));
-    const tempMarkdownPath = path3.join(tempDir, `${activeFile.basename}.md`);
-    new Notice(`\u6B63\u5728\u66F4\u65B0 JoySpace\uFF1A\u300A${activeFile.basename}\u300B...`);
+    const tempMarkdownPath = path3.join(tempDir, `${file.basename}.md`);
     try {
       await writeFile(tempMarkdownPath, prepared.markdown, "utf8");
       const inspectStdout = await this.execWebcli(["joyspace", "edit", joyspaceUrl, "--mode", "inspect", "-f", "json"], markdownDir);
@@ -1227,20 +1336,6 @@ ${pythonExecutable}`, 8e3);
       if (!viewText.includes(pageId) || !viewText.includes(prepared.title)) {
         throw new Error("\u66F4\u65B0\u540E\u56DE\u8BFB\u9A8C\u8BC1\u5931\u8D25\uFF0C\u672A\u786E\u8BA4\u9875\u9762 ID \u548C\u6807\u9898\u4E00\u81F4");
       }
-      await this.saveJoySpaceFrontmatter(activeFile, {
-        "joyspace-page-id": pageId,
-        "joyspace-url": joyspaceUrl,
-        "joyspace-sync-hash": prepared.hash,
-        "joyspace-synced-at": (/* @__PURE__ */ new Date()).toISOString()
-      });
-      new Notice(`\u5DF2\u66F4\u65B0 JoySpace\uFF1A${prepared.title}`, 6e3);
-      if (this.settings.openAfterUpload) {
-        await shell.openExternal(joyspaceUrl);
-      }
-    } catch (error) {
-      const message = error?.stderr?.trim() || error?.message || String(error);
-      console.error("[JoySpace Publisher] \u66F4\u65B0\u5931\u8D25\uFF1A", error);
-      new Notice(`JoySpace \u66F4\u65B0\u5931\u8D25\uFF1A${message}`, 12e3);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
