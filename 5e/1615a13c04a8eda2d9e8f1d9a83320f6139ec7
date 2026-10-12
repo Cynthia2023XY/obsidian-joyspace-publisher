@@ -1,0 +1,19 @@
+src/main.js
+  s_4f396018bf6eb1::t_10d85e091f8add 526-527,534
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "5e1615a13c04a8eda2d9e8f1d9a83320f6139ec7",
+  "prompts": {},
+  "sessions": {
+    "s_4f396018bf6eb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d2f2-f837-7aa2-afa8-7144c132441a",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "dingxinyi.2 <dingxinyi.2@jd.com>"
+    }
+  }
+}
