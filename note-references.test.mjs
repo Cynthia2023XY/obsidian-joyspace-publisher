@@ -53,3 +53,26 @@ test("缺失笔记、索引过期和缺失链接映射明确报错", () => {
   const plan = collectNoteReferences(raw, root, cache, () => child);
   assert.throws(() => replaceNoteReferences(raw, plan.references, new Map()), /尚未发布/);
 });
+
+/** 连续的独立引用在上传正文中保留视觉换行 */
+test("连续三行引用转换为独立段落，本地原文不变", () => {
+  // 三种笔记引用语法各占一行
+  const raw = "[[child]]\n[[child|别名]]\n![[child]]\n";
+  // 宿主实际识别的引用位置
+  const cache = { links: [entry(raw, "[[child]]", "child"), entry(raw, "[[child|别名]]", "child", "别名")], embeds: [entry(raw, "![[child]]", "child")] };
+  // 一级引用解析结果
+  const plan = collectNoteReferences(raw, root, cache, () => child);
+  assert.equal(replaceNoteReferences(raw, plan.references, new Map([[child.path, "https://joyspace.jd.com/pages/x"]])), "[child](https://joyspace.jd.com/pages/x)\n\n[别名](https://joyspace.jd.com/pages/x)\n\n[child](https://joyspace.jd.com/pages/x)\n");
+  assert.equal(raw, "[[child]]\n[[child|别名]]\n![[child]]\n");
+});
+
+/** 行内引用和已有段落不能被追加空行 */
+test("不改变行内引用、列表引用和已有空行", () => {
+  for (const raw of ["说明 [[child]]\n[[child|别名]]", "- [[child]]\n- [[child|别名]]", "[[child]]\n\n[[child|别名]]"]) {
+    // 当前变体中的引用索引
+    const cache = { links: [entry(raw, "[[child]]", "child"), entry(raw, "[[child|别名]]", "child", "别名")] };
+    // 当前变体中解析出的一级引用
+    const plan = collectNoteReferences(raw, root, cache, () => child);
+    assert.equal(replaceNoteReferences(raw, plan.references, new Map([[child.path, "https://joyspace.jd.com/pages/x"]])), raw.replace("[[child]]", "[child](https://joyspace.jd.com/pages/x)").replace("[[child|别名]]", "[别名](https://joyspace.jd.com/pages/x)"));
+  }
+});

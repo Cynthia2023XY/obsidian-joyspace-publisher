@@ -11,7 +11,8 @@ Publish, update, and import Markdown documents between Obsidian and JoySpace.
 - Publish the active note and its direct references with a dedicated command, converting uploaded references to JoySpace links.
 - Override the default destination with `joyspace-target-page-url` in frontmatter.
 - Import a JoySpace regular document into the current Obsidian folder.
-- Optionally promote section headings and open the JoySpace page after publishing.
+- Use the Markdown filename (without `.md`) as the page title, preserving all body headings and their original levels.
+- Optionally open the JoySpace page after publishing.
 
 ## Requirements
 

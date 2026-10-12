@@ -58,8 +58,8 @@ test("引用先发布，主笔记后发布；普通更新不重复创建且保�
   await state.plugin.runActivePublish({ includeReferences: true });
   assert.equal(state.calls.length, 2);
   assert.equal(state.calls[0].title, "child");
-  assert.equal(state.calls[0].markdown, "[[grandchild]]\n");
-  assert.equal(state.calls[1].markdown, "[child](https://joyspace.jd.com/pages/child)\n");
+  assert.equal(state.calls[0].markdown, "[[grandchild]]");
+  assert.equal(state.calls[1].markdown, "[child](https://joyspace.jd.com/pages/child)");
   assert.equal(state.bodies.get("root.md"), "[[child]]");
   await state.plugin.runActivePublish();
   assert.equal(state.calls.length, 2);
@@ -90,4 +90,36 @@ test("创建后回读失败保存绑定，重试更新原页面", async () => {
   await state.plugin.runActivePublish({ includeReferences: true });
   assert.equal(state.calls[1].update, "child.md");
   assert.equal(state.calls.filter((call) => call.title === "child").length, 1);
+});
+
+/** 检查插件入口是否删除无 H1 的连续链接正文 */
+test("插件预处理保留无 H1 的三行链接正文", () => {
+  // 使用真实插件实例执行正文预处理
+  const state = fixture();
+  // 三个连续链接对应问题笔记的上传副本结构
+  const body = "[甲](https://joyspace.jd.com/pages/a)\n[乙](https://joyspace.jd.com/pages/b)\n[丙](https://joyspace.jd.com/pages/c)\n";
+  assert.equal(state.plugin.prepareJoySpaceMarkdown("---\ntags: []\n---\n" + body, state.root).markdown, body);
+});
+
+/** 检查插件入口是否误删标题后的操作说明 */
+test("插件预处理保留 H1 和首段操作说明", () => {
+  // 使用真实插件实例执行测试2结构的正文预处理
+  const state = fixture();
+  // 标题后的说明、章节和引用都属于正文
+  const body = "操作说明应保留。\n\n## 引用章节\n\n[甲](https://joyspace.jd.com/pages/a)\n";
+  assert.equal(state.plugin.prepareJoySpaceMarkdown("# 测试标题\n\n" + body, state.root).markdown, "# 测试标题\n\n" + body);
+  assert.equal(state.plugin.prepareJoySpaceMarkdown(body, state.root).title, "root");
+});
+
+/** 验证旧设置不会改变任何正文标题层级 */
+test("旧标题提升设置不再生效，一级到六级标题完整保留", () => {
+  // 使用保存了旧设置的插件实例验证升级后的行为
+  const state = fixture();
+  state.plugin.settings.promoteSectionHeadings = true;
+  // 覆盖所有 Markdown 标题等级及开头正文标题
+  const body = "# 正文一级\n\n## 正文二级\n\n### 正文三级\n\n#### 正文四级\n\n##### 正文五级\n\n###### 正文六级\n";
+  // 文件名与正文 H1 不同，页面标题仍取文件名
+  const prepared = state.plugin.prepareJoySpaceMarkdown(body, state.root);
+  assert.equal(prepared.title, "root");
+  assert.equal(prepared.markdown, body);
 });

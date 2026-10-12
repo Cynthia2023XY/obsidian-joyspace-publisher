@@ -11,7 +11,8 @@
 - 使用专有命令，同时发布当前笔记及其一层引用，并将上传正文中的引用转换为 JoySpace 链接。
 - 通过笔记 YAML 中的 `joyspace-target-page-url` 覆盖默认发布位置。
 - 将 JoySpace 普通文档导入 Obsidian 当前目录。
-- 可选提升章节标题层级，以及发布成功后打开 JoySpace 页面。
+- 页面标题使用 Markdown 文件名（不含 `.md`），正文保留首个 H1 和全部标题层级。
+- 可选在发布成功后打开 JoySpace 页面。
 
 ## 使用要求
 

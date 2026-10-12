@@ -165,13 +165,8 @@ export async function loadJdCookiesFromBrowser({ pythonCommand = process.env.PYT
 }
 
 export function extractTitleFromMarkdown(markdown, filePath) {
-  const heading = markdown.match(/^\s*#\s+(.+?)\s*$/m)?.[1]?.trim();
-  if (heading) {
-    return heading;
-  }
-
-  const stem = path.basename(filePath || "untitled.md", path.extname(filePath || "untitled.md"));
-  return stem || "untitled";
+  // 文件名作为页面标题，正文中的任何 H1 都属于正文
+  return path.basename(filePath || "untitled.md", path.extname(filePath || "untitled.md")) || "untitled";
 }
 
 /** 移除文档开头的 Obsidian/YAML 属性块，避免内部属性被同步到 JoySpace 正文 */
@@ -231,7 +226,8 @@ export function buildCreatePagePayload({ title, markdown, teamId, folderId }) {
     title,
     page_type: 13,
     teamId,
-    content: [{ value: markdown }],
+    // 创建接口使用首块作为页面标题，独立占位避免消耗正文首块
+    content: [{ value: `# ${String(title).replace(/[\r\n]/g, " ")}\n\n${markdown}` }],
     contentType: "markdown",
   };
 
@@ -425,12 +421,8 @@ async function publishMarkdownFile(options) {
   /** 去除文档属性后的待上传正文，避免 Obsidian 元数据出现在 JoySpace 页面中 */
   const markdownWithoutFrontmatter = stripYamlFrontmatter(originalMarkdown);
   const title = options.title || extractTitleFromMarkdown(markdownWithoutFrontmatter, options.filePath);
-  // 已预处理正文直接复用，防止再次移除标题
-  const bodyWithoutTitle = options.prepared ? originalMarkdown : removeFirstH1(markdownWithoutFrontmatter);
-  // 最终提交的正文只在未预处理时提升标题层级
-  const markdown = !options.prepared && options.promoteSectionHeadings
-    ? promoteSectionHeadingsForJoySpace(bodyWithoutTitle)
-    : bodyWithoutTitle;
+  // 正文标题全部保留，旧的提升标题选项不再生效
+  const markdown = markdownWithoutFrontmatter;
   const auth = await resolveAuth(options);
   const { teamHeaderId } = requireTenantConfig(options.tenantCode);
   const cookieHeader = buildCookieHeader(auth);
@@ -475,9 +467,9 @@ async function publishMarkdownFile(options) {
     teamId: created.team_id || created.teamId || location.teamId,
     folderId: created.folder_id || created.folderId || location.folderId || "",
     locationSource: location.source,
-    promotedSectionHeadings: options.promoteSectionHeadings,
+    promotedSectionHeadings: false,
     verificationError,
-    verified: Array.isArray(verified?.content) && verified.content.length > 0,
+    verified: Array.isArray(verified?.content) && (markdown.trim() ? verified.content.length > 1 : verified.content.length > 0),
   };
 }
 

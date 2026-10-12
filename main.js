@@ -213,12 +213,7 @@ async function loadJdCookiesFromBrowser({ pythonCommand = process.env.PYTHON || 
   }
 }
 function extractTitleFromMarkdown(markdown, filePath) {
-  const heading = markdown.match(/^\s*#\s+(.+?)\s*$/m)?.[1]?.trim();
-  if (heading) {
-    return heading;
-  }
-  const stem = import_node_path.default.basename(filePath || "untitled.md", import_node_path.default.extname(filePath || "untitled.md"));
-  return stem || "untitled";
+  return import_node_path.default.basename(filePath || "untitled.md", import_node_path.default.extname(filePath || "untitled.md")) || "untitled";
 }
 function stripYamlFrontmatter(markdown) {
   const text = String(markdown || "");
@@ -258,7 +253,10 @@ function buildCreatePagePayload({ title, markdown, teamId, folderId }) {
     title,
     page_type: 13,
     teamId,
-    content: [{ value: markdown }],
+    // 创建接口使用首块作为页面标题，独立占位避免消耗正文首块
+    content: [{ value: `# ${String(title).replace(/[\r\n]/g, " ")}
+
+${markdown}` }],
     contentType: "markdown"
   };
   if (folderId) {
@@ -372,8 +370,7 @@ async function publishMarkdownFile(options) {
   const originalMarkdown = options.markdown ?? await import_promises.default.readFile(options.filePath, "utf8");
   const markdownWithoutFrontmatter = stripYamlFrontmatter(originalMarkdown);
   const title = options.title || extractTitleFromMarkdown(markdownWithoutFrontmatter, options.filePath);
-  const bodyWithoutTitle = options.prepared ? originalMarkdown : removeFirstH1(markdownWithoutFrontmatter);
-  const markdown = !options.prepared && options.promoteSectionHeadings ? promoteSectionHeadingsForJoySpace(bodyWithoutTitle) : bodyWithoutTitle;
+  const markdown = markdownWithoutFrontmatter;
   const auth = await resolveAuth(options);
   const { teamHeaderId } = requireTenantConfig(options.tenantCode);
   const cookieHeader = buildCookieHeader(auth);
@@ -411,9 +408,9 @@ async function publishMarkdownFile(options) {
     teamId: created.team_id || created.teamId || location.teamId,
     folderId: created.folder_id || created.folderId || location.folderId || "",
     locationSource: location.source,
-    promotedSectionHeadings: options.promoteSectionHeadings,
+    promotedSectionHeadings: false,
     verificationError,
-    verified: Array.isArray(verified?.content) && verified.content.length > 0
+    verified: Array.isArray(verified?.content) && (markdown.trim() ? verified.content.length > 1 : verified.content.length > 0)
   };
 }
 var import_node_child_process, import_promises, import_node_path, import_node_util, TENANT_CONFIG, execFileAsync, BROWSER_COOKIE3_SCRIPT;
@@ -828,7 +825,12 @@ var require_note_references = __commonJS({
         const url = urls.get(reference.file.path);
         if (!url) throw new Error(`\u5F15\u7528\u7B14\u8BB0\u5C1A\u672A\u53D1\u5E03\uFF1A${reference.file.path}`);
         const label = reference.displayText.replace(/([\\\[\]])/g, "\\$1");
-        result = result.slice(0, reference.start) + `[${label}](${url})` + result.slice(reference.end);
+        const nextReference = references.find((candidate) => candidate.start > reference.end && /^[ \t]*\r?\n[ \t]*$/.test(markdown.slice(reference.end, candidate.start)));
+        const linePrefix = markdown.slice(markdown.lastIndexOf("\n", reference.start - 1) + 1, reference.start);
+        const nextLineEnd = nextReference ? markdown.indexOf("\n", nextReference.end) : -1;
+        const nextLineSuffix = nextReference ? markdown.slice(nextReference.end, nextLineEnd < 0 ? markdown.length : nextLineEnd) : "";
+        const separator = nextReference && /^[ \t]*$/.test(linePrefix) && /^[ \t\r]*$/.test(nextLineSuffix) ? "\n" : "";
+        result = result.slice(0, reference.start) + `[${label}](${url})${separator}` + result.slice(reference.end);
       }
       return result;
     }
@@ -875,7 +877,6 @@ var DEFAULT_SETTINGS = {
   pythonExecutable: "",
   targetPageUrl: "",
   tenantCode: "CN.JD.GROUP",
-  promoteSectionHeadings: false,
   openAfterUpload: true,
   webcliExecutable: ""
 };
@@ -1027,35 +1028,12 @@ ${pythonExecutable}`, 8e3);
   stripYamlFrontmatter(markdown) {
     return String(markdown || "").replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "");
   }
-  promoteSectionHeadingsForJoySpace(markdown) {
-    const lines = String(markdown || "").split("\n");
-    let inFence = false;
-    return lines.map((line) => {
-      if (/^\s*```/.test(line)) {
-        inFence = !inFence;
-        return line;
-      }
-      if (inFence) {
-        return line;
-      }
-      return line.replace(/^(#{2,6})(\s+)/, (match, hashes, space) => `${hashes.slice(1)}${space}`);
-    }).join("\n");
-  }
-  extractTitleFromMarkdown(markdown, file) {
-    const heading = String(markdown || "").match(/^\s*#\s+(.+?)\s*$/m)?.[1]?.trim();
-    return heading || file.basename || "untitled";
-  }
-  removeFirstH1(markdown) {
-    return String(markdown || "").replace(/^\s*#\s+.+?\s*\r?\n+/, "");
-  }
+  /** 页面名称固定使用笔记文件名，正文标题和章节结构完整保留 */
   prepareJoySpaceMarkdown(rawMarkdown, file) {
-    const markdownWithoutFrontmatter = this.stripYamlFrontmatter(rawMarkdown);
-    const title = this.extractTitleFromMarkdown(markdownWithoutFrontmatter, file);
-    const bodyWithoutTitle = this.removeFirstH1(markdownWithoutFrontmatter);
-    const markdown = this.settings.promoteSectionHeadings ? this.promoteSectionHeadingsForJoySpace(bodyWithoutTitle) : bodyWithoutTitle;
-    const normalizedMarkdown = markdown.replace(/\r\n/g, "\n").trimEnd() + "\n";
-    const hash = crypto.createHash("sha256").update(normalizedMarkdown, "utf8").digest("hex");
-    return { title, markdown: normalizedMarkdown, hash };
+    const markdown = this.stripYamlFrontmatter(rawMarkdown).replace(/\r\n/g, "\n");
+    const title = file.basename || "untitled";
+    const hash = crypto.createHash("sha256").update("preserve-headings-v2\n" + title + "\n" + markdown, "utf8").digest("hex");
+    return { title, markdown, hash };
   }
   getFrontmatterValue(cache, key) {
     const value = cache?.frontmatter?.[key];
@@ -1165,7 +1143,6 @@ ${error?.message || String(error)}
       referenceMode = true;
     }
     const prepared = this.prepareJoySpaceMarkdown(source, file);
-    prepared.hash = crypto.createHash("sha256").update(prepared.title + "\n" + prepared.markdown, "utf8").digest("hex");
     let result;
     if (pageId) {
       const link = this.resolveJoySpaceUrl(cache);
@@ -1426,12 +1403,6 @@ var JoySpacePublisherSettingTab = class extends PluginSettingTab {
     new Setting(containerEl).setName("\u79DF\u6237\u7F16\u7801").setDesc("\u9ED8\u8BA4\u4F7F\u7528\u4E2D\u56FD\u5927\u9646\u4EAC\u4E1C\u96C6\u56E2\u79DF\u6237\u3002").addDropdown(
       (dropdown) => dropdown.addOption("CN.JD.GROUP", "CN.JD.GROUP").addOption("TH.JD.GROUP", "TH.JD.GROUP").addOption("ID.JD.GROUP", "ID.JD.GROUP").addOption("SF.JD.GROUP", "SF.JD.GROUP").setValue(this.plugin.settings.tenantCode).onChange(async (value) => {
         this.plugin.settings.tenantCode = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new Setting(containerEl).setName("\u63D0\u5347\u7AE0\u8282\u6807\u9898\u5C42\u7EA7").setDesc("\u4E0A\u4F20\u65F6\u5C06 ## \u8F6C\u4E3A #\u3001### \u8F6C\u4E3A ##\uFF0C\u4E0D\u4F1A\u4FEE\u6539\u672C\u5730 Markdown\u3002").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.promoteSectionHeadings).onChange(async (value) => {
-        this.plugin.settings.promoteSectionHeadings = value;
         await this.plugin.saveSettings();
       })
     );

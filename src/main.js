@@ -62,7 +62,6 @@ const DEFAULT_SETTINGS = {
   pythonExecutable: "",
   targetPageUrl: "",
   tenantCode: "CN.JD.GROUP",
-  promoteSectionHeadings: false,
   openAfterUpload: true,
   webcliExecutable: "",
 };
@@ -251,42 +250,15 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     return String(markdown || "").replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "");
   }
 
-  promoteSectionHeadingsForJoySpace(markdown) {
-    const lines = String(markdown || "").split("\n");
-    let inFence = false;
-    return lines
-      .map((line) => {
-        if (/^\s*```/.test(line)) {
-          inFence = !inFence;
-          return line;
-        }
-        if (inFence) {
-          return line;
-        }
-        return line.replace(/^(#{2,6})(\s+)/, (match, hashes, space) => `${hashes.slice(1)}${space}`);
-      })
-      .join("\n");
-  }
-
-  extractTitleFromMarkdown(markdown, file) {
-    const heading = String(markdown || "").match(/^\s*#\s+(.+?)\s*$/m)?.[1]?.trim();
-    return heading || file.basename || "untitled";
-  }
-
-  removeFirstH1(markdown) {
-    return String(markdown || "").replace(/^\s*#\s+.+?\s*\r?\n+/, "");
-  }
-
+  /** 页面名称固定使用笔记文件名，正文标题和章节结构完整保留 */
   prepareJoySpaceMarkdown(rawMarkdown, file) {
-    const markdownWithoutFrontmatter = this.stripYamlFrontmatter(rawMarkdown);
-    const title = this.extractTitleFromMarkdown(markdownWithoutFrontmatter, file);
-    const bodyWithoutTitle = this.removeFirstH1(markdownWithoutFrontmatter);
-    const markdown = this.settings.promoteSectionHeadings
-      ? this.promoteSectionHeadingsForJoySpace(bodyWithoutTitle)
-      : bodyWithoutTitle;
-    const normalizedMarkdown = markdown.replace(/\r\n/g, "\n").trimEnd() + "\n";
-    const hash = crypto.createHash("sha256").update(normalizedMarkdown, "utf8").digest("hex");
-    return { title, markdown: normalizedMarkdown, hash };
+    // 去除本地属性块后保留原有正文和标题层级
+    const markdown = this.stripYamlFrontmatter(rawMarkdown).replace(/\r\n/g, "\n");
+    // 文件名决定 JoySpace 页面名称，不从正文 H1 提取
+    const title = file.basename || "untitled";
+    // 标题与正文共同参与同步，升级处理规则后强制重新核验
+    const hash = crypto.createHash("sha256").update("preserve-headings-v2\n" + title + "\n" + markdown, "utf8").digest("hex");
+    return { title, markdown, hash };
   }
 
   getFrontmatterValue(cache, key) {
@@ -418,7 +390,6 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
     }
     // 标题与最终上传正文共同决定同步状态
     const prepared = this.prepareJoySpaceMarkdown(source, file);
-    prepared.hash = crypto.createHash("sha256").update(prepared.title + "\n" + prepared.markdown, "utf8").digest("hex");
     // 指定文件的发布或更新结果
     let result;
     if (pageId) {
@@ -760,16 +731,6 @@ class JoySpacePublisherSettingTab extends PluginSettingTab {
             this.plugin.settings.tenantCode = value;
             await this.plugin.saveSettings();
           }),
-      );
-
-    new Setting(containerEl)
-      .setName("提升章节标题层级")
-      .setDesc("上传时将 ## 转为 #、### 转为 ##，不会修改本地 Markdown。")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.promoteSectionHeadings).onChange(async (value) => {
-          this.plugin.settings.promoteSectionHeadings = value;
-          await this.plugin.saveSettings();
-        }),
       );
 
     new Setting(containerEl)

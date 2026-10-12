@@ -41,7 +41,17 @@ function replaceNoteReferences(markdown, references, urls) {
     if (!url) throw new Error(`引用笔记尚未发布：${reference.file.path}`);
     // 转义显示文字，避免别名中的方括号破坏 Markdown
     const label = reference.displayText.replace(/([\\\[\]])/g, "\\$1");
-    result = result.slice(0, reference.start) + `[${label}](${url})` + result.slice(reference.end);
+    // 仅将连续独占一行的笔记引用分为独立段落，避免服务端合并软换行
+    const nextReference = references.find((candidate) => candidate.start > reference.end && /^[ \t]*\r?\n[ \t]*$/.test(markdown.slice(reference.end, candidate.start)));
+    // 当前引用前没有正文、列表标记或引用块标记
+    const linePrefix = markdown.slice(markdown.lastIndexOf("\n", reference.start - 1) + 1, reference.start);
+    // 下一处引用后没有同一行的其他正文
+    const nextLineEnd = nextReference ? markdown.indexOf("\n", nextReference.end) : -1;
+    // 只检查真实源码位置，不匹配代码块或任意外部链接
+    const nextLineSuffix = nextReference ? markdown.slice(nextReference.end, nextLineEnd < 0 ? markdown.length : nextLineEnd) : "";
+    // 使用空行建立 Markdown 段落，不改变源笔记或普通行内引用
+    const separator = nextReference && /^[ \t]*$/.test(linePrefix) && /^[ \t\r]*$/.test(nextLineSuffix) ? "\n" : "";
+    result = result.slice(0, reference.start) + `[${label}](${url})${separator}` + result.slice(reference.end);
   }
   return result;
 }
