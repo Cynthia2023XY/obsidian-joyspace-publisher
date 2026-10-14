@@ -1,0 +1,21 @@
+joyspace-http.test.mjs
+  s_e264ebcf01a85a::t_1edb5535e76709 3-5,43-89
+src/infrastructure/joyspace-http.mjs
+  s_e264ebcf01a85a::t_1edb5535e76709 57-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "dc9cb3442be09aab8c9743c695266f84b7649b6d",
+  "prompts": {},
+  "sessions": {
+    "s_e264ebcf01a85a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13868-0306-7791-ac98-59249ccb7e0b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "dingxinyi.2 <dingxinyi.2@jd.com>"
+    }
+  }
+}
