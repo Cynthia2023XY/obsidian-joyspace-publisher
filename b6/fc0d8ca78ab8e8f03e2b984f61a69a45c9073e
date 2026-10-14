@@ -1,0 +1,21 @@
+README.md
+  s_8a3e73024ed46c::t_e7e184a76b305b 5-22
+.npmrc
+  s_8a3e73024ed46c::t_e7e184a76b305b 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "b6fc0d8ca78ab8e8f03e2b984f61a69a45c9073e",
+  "prompts": {},
+  "sessions": {
+    "s_8a3e73024ed46c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1383f-c3e4-7e03-807f-8f3ad96488af",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "dingxinyi.2 <dingxinyi.2@jd.com>"
+    }
+  }
+}
