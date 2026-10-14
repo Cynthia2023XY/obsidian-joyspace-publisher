@@ -135,7 +135,8 @@ __export(import_markdown_doc_exports, {
   publishMarkdownFile: () => publishMarkdownFile,
   removeFirstH1: () => removeFirstH1,
   resolveAuth: () => resolveAuth,
-  stripYamlFrontmatter: () => stripYamlFrontmatter
+  stripYamlFrontmatter: () => stripYamlFrontmatter,
+  verifyCreatedPageContent: () => verifyCreatedPageContent
 });
 function requireTenantConfig(tenantCode) {
   const config = TENANT_CONFIG[tenantCode];
@@ -350,6 +351,22 @@ async function verifyJoySpacePage({ pageId, cookieHeader, teamHeaderId }) {
     body: { pageId }
   });
 }
+async function verifyCreatedPageContent({ readContent, hasBody, wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)) }) {
+  const delays = [0, 500, 1500, 3e3];
+  let verificationError = "";
+  for (const delay of delays) {
+    if (delay) await wait(delay);
+    try {
+      const page = await readContent();
+      const count = Array.isArray(page?.content) ? page.content.length : 0;
+      if (count > (hasBody ? 1 : 0)) return { verified: true, verificationError: "" };
+      verificationError = `\u56DE\u8BFB\u5230 ${count} \u4E2A\u5185\u5BB9\u5757\uFF0C${hasBody ? "\u5C1A\u672A\u8BFB\u5230\u6B63\u6587" : "\u5C1A\u672A\u8BFB\u5230\u9875\u9762\u6807\u9898"}`;
+    } catch (error) {
+      verificationError = error?.message || String(error);
+    }
+  }
+  return { verified: false, verificationError };
+}
 function normalizeCreatedPageResponse(createResponse) {
   const created = createResponse && typeof createResponse === "object" ? createResponse : {};
   const pageId = String(created.id || created.pageId || "").trim();
@@ -388,17 +405,10 @@ async function publishMarkdownFile(options) {
   });
   const createdPage = normalizeCreatedPageResponse(createResponse);
   const created = createdPage.created;
-  let verified = null;
-  let verificationError = "";
-  try {
-    verified = await verifyJoySpacePage({
-      pageId: createdPage.pageId,
-      cookieHeader,
-      teamHeaderId
-    });
-  } catch (error) {
-    verificationError = error?.message || String(error);
-  }
+  const verification = await verifyCreatedPageContent({
+    hasBody: Boolean(markdown.trim()),
+    readContent: () => verifyJoySpacePage({ pageId: createdPage.pageId, cookieHeader, teamHeaderId })
+  });
   return {
     authMode: auth.mode,
     cookieSource: auth.cookieSource || void 0,
@@ -409,8 +419,7 @@ async function publishMarkdownFile(options) {
     folderId: created.folder_id || created.folderId || location.folderId || "",
     locationSource: location.source,
     promotedSectionHeadings: false,
-    verificationError,
-    verified: Array.isArray(verified?.content) && (markdown.trim() ? verified.content.length > 1 : verified.content.length > 0)
+    ...verification
   };
 }
 var import_node_child_process, import_promises, import_node_path, import_node_util, TENANT_CONFIG, execFileAsync, BROWSER_COOKIE3_SCRIPT;
@@ -1174,7 +1183,7 @@ ${error?.message || String(error)}
         "joyspace-url": result.link,
         "joyspace-reference-mode": referenceMode ? "direct" : "none"
       });
-      if (!result.verified) throw new Error("\u9875\u9762\u5DF2\u521B\u5EFA\u5E76\u4FDD\u5B58\u7ED1\u5B9A\uFF0C\u4F46\u6B63\u6587\u56DE\u8BFB\u9A8C\u8BC1\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u66F4\u65B0");
+      if (!result.verified) throw new Error(`\u9875\u9762\u5DF2\u521B\u5EFA\u5E76\u4FDD\u5B58\u7ED1\u5B9A\uFF0C\u4F46\u6B63\u6587\u56DE\u8BFB\u9A8C\u8BC1\u5931\u8D25\uFF1A${result.verificationError || "\u672A\u8BFB\u53D6\u5230\u6B63\u6587"}\u3002\u8BF7\u5148\u67E5\u770B\u8FDC\u7AEF\u9875\u9762\uFF0C\u907F\u514D\u91CD\u590D\u521B\u5EFA`);
     }
     await this.saveJoySpaceFrontmatter(file, {
       "joyspace-page-id": result.pageId,

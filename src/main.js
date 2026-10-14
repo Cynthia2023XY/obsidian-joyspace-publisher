@@ -421,7 +421,7 @@ module.exports = class JoySpacePublisherPlugin extends Plugin {
         "joyspace-page-id": result.pageId, "joyspace-url": result.link,
         "joyspace-reference-mode": referenceMode ? "direct" : "none",
       });
-      if (!result.verified) throw new Error("页面已创建并保存绑定，但正文回读验证失败，请重试更新");
+      if (!result.verified) throw new Error(`页面已创建并保存绑定，但正文回读验证失败：${result.verificationError || "未读取到正文"}。请先查看远端页面，避免重复创建`);
     }
     await this.saveJoySpaceFrontmatter(file, {
       "joyspace-page-id": result.pageId, "joyspace-url": result.link,

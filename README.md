@@ -2,6 +2,24 @@
 
 简体中文 | [English](README-EN.md)
 
+## English overview
+
+Publish, update, and import Markdown documents between Obsidian and JoySpace. Publish the active note together with its direct references, and convert references in the uploaded copy to JoySpace links while preserving local note bodies.
+
+This plugin requires Obsidian desktop, a JoySpace account with access to the destination, Python 3 with the user-installed `browser_cookie3` package, and a supported browser signed in to `joyspace.jd.com` and `jd.com`. Updating existing pages also requires the locally installed `webcli` executable. The plugin does not install or update these dependencies.
+
+### Privacy and system access
+
+- Network requests to `https://apijoyspace.jd.com` create pages, inspect destinations, and retrieve documents. Publishing sends document titles, Markdown bodies, tenant and destination information; publishing direct references also sends those referenced notes.
+- Authentication invokes Python to read `jd.com` cookies from local browser profiles outside the vault. Cookies are used only for JoySpace authentication and are not saved to plugin settings, notes, or an author-controlled service.
+- Updating a page invokes the local `webcli` executable with an argument array. Document bodies are not concatenated into shell commands. Local executable discovery uses the user's login shell.
+- Temporary Markdown files for WebCLI updates are written outside the vault in the operating system temporary directory and removed after success or failure.
+- The plugin contains no client-side analytics, telemetry, advertising, or author-controlled data collection service.
+
+See the [English documentation](README-EN.md) for installation and usage instructions.
+
+## 中文说明
+
 在 Obsidian 与 JoySpace 之间发布、更新和导入 Markdown 文档。
 
 ## 功能

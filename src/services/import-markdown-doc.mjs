@@ -340,6 +340,28 @@ async function verifyJoySpacePage({ pageId, cookieHeader, teamHeaderId }) {
   });
 }
 
+/** 创建后有限回读，兼容正文落盘延迟；重试失败保留真实原因 */
+export async function verifyCreatedPageContent({ readContent, hasBody, wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)) }) {
+  // 四次读取总计等待五秒，不重复创建远端页面
+  const delays = [0, 500, 1500, 3000];
+  // 最后一次回读结果决定是否允许保存同步成功哈希
+  let verificationError = "";
+  for (const delay of delays) {
+    if (delay) await wait(delay);
+    try {
+      // 创建接口可能先返回标题，正文稍后才可读取
+      const page = await readContent();
+      // 非空正文必须至少包含标题之外的内容块
+      const count = Array.isArray(page?.content) ? page.content.length : 0;
+      if (count > (hasBody ? 1 : 0)) return { verified: true, verificationError: "" };
+      verificationError = `回读到 ${count} 个内容块，${hasBody ? "尚未读到正文" : "尚未读到页面标题"}`;
+    } catch (error) {
+      verificationError = error?.message || String(error);
+    }
+  }
+  return { verified: false, verificationError };
+}
+
 /** 统一 JoySpace 创建接口的多种返回字段，避免创建成功后丢失页面地址 */
 export function normalizeCreatedPageResponse(createResponse) {
   /** JoySpace 创建接口返回的文档数据 */
@@ -444,19 +466,11 @@ async function publishMarkdownFile(options) {
   const createdPage = normalizeCreatedPageResponse(createResponse);
   /** JoySpace 创建接口返回的原始字段 */
   const created = createdPage.created;
-  // 页面创建后即使回读异常也返回绑定信息，由调用方保存以支持重试
-  let verified = null;
-  // 回读异常原因供调用方展示与排查
-  let verificationError = "";
-  try {
-    verified = await verifyJoySpacePage({
-      pageId: createdPage.pageId,
-      cookieHeader,
-      teamHeaderId,
-    });
-  } catch (error) {
-    verificationError = error?.message || String(error);
-  }
+  // 创建和正文落盘可能不同步，有限重试后返回绑定与具体失败原因
+  const verification = await verifyCreatedPageContent({
+    hasBody: Boolean(markdown.trim()),
+    readContent: () => verifyJoySpacePage({ pageId: createdPage.pageId, cookieHeader, teamHeaderId }),
+  });
 
   return {
     authMode: auth.mode,
@@ -468,8 +482,7 @@ async function publishMarkdownFile(options) {
     folderId: created.folder_id || created.folderId || location.folderId || "",
     locationSource: location.source,
     promotedSectionHeadings: false,
-    verificationError,
-    verified: Array.isArray(verified?.content) && (markdown.trim() ? verified.content.length > 1 : verified.content.length > 0),
+    ...verification,
   };
 }
 

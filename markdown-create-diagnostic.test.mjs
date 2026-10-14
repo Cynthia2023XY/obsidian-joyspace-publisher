@@ -18,7 +18,7 @@ function serviceFixture(markdown, returnedContent) {
   const requests = [];
   // 模拟 CJS 模块导出
   const module = { exports: {} };
-  vm.runInNewContext(compiled, { module, exports: module.exports, process, console, require(name) {
+  vm.runInNewContext(compiled, { module, exports: module.exports, process, console, setTimeout: (callback) => callback(), require(name) {
     if (name === "node:fs/promises") return { readFile: async () => markdown };
     if (name === "node:util") return { promisify: () => async () => ({ stdout: JSON.stringify({ ok: true, cookies: { mock: "test-only" } }) }) };
     if (name.includes("joyspace-http")) return { requestJoySpaceJson: async (request) => {
