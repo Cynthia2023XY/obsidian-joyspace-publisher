@@ -73,7 +73,7 @@ async function requestJoySpaceJson({ method, url, cookieHeader, teamHeaderId, bo
   }
   const { payload, ...requestOptions } = createJoySpaceRequestOptions({ method, cookieHeader, teamHeaderId, body });
   return new Promise((resolve, reject) => {
-    const request = (0, import_node_https.request)(requestUrl, requestOptions, (response) => {
+    const request = (0, import_node_https.request)(requestUrl.href, requestOptions, (response) => {
       const chunks = [];
       let responseBytes = 0;
       response.on("data", (chunk) => {

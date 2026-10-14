@@ -54,7 +54,8 @@ export async function requestJoySpaceJson({ method, url, cookieHeader, teamHeade
 
   return new Promise((resolve, reject) => {
     /** 当前 JoySpace HTTPS 请求 */
-    const request = httpsRequest(requestUrl, requestOptions, (response) => {
+    // 使用字符串地址，避免旧版 Electron 将浏览器 URL 对象误认作请求配置
+    const request = httpsRequest(requestUrl.href, requestOptions, (response) => {
       /** 分段接收的响应内容 */
       const chunks = [];
       /** 当前累计响应字节数 */
